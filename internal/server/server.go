@@ -10,30 +10,54 @@ import (
 	_ "github.com/joho/godotenv/autoload"
 
 	"kilimo/internal/database"
+	"kilimo/internal/ml"
+	"kilimo/internal/nasa"
+	"kilimo/internal/rotation"
+	"kilimo/internal/soil"
 )
 
 type Server struct {
 	port int
 
-	db database.Service
+	db       database.Service
+	nasa     *nasa.Service
+	soil     *soil.Service
+	ml       *ml.Engine
+	rotation *rotation.Service
 }
 
 func NewServer() *http.Server {
-	port, _ := strconv.Atoi(os.Getenv("PORT"))
-	NewServer := &Server{
-		port: port,
+	portStr := os.Getenv("PORT")
+	port, _ := strconv.Atoi(portStr)
+	if port == 0 {
+		port = 8080
+	}
 
-		db: database.New(),
+	climateCsv := "training_data/kenya-climate-data-1991-2016-rainfallmm.csv"
+	soilCsv := "training_data/kenya_regional_soil_data.csv"
+
+	nasaSvc := nasa.NewService(climateCsv)
+	soilSvc, _ := soil.NewService(soilCsv)
+	mlEngine := ml.NewEngine()
+	rotationSvc := rotation.NewService(nasaSvc, soilSvc, mlEngine)
+
+	s := &Server{
+		port:     port,
+		db:       database.New(),
+		nasa:     nasaSvc,
+		soil:     soilSvc,
+		ml:       mlEngine,
+		rotation: rotationSvc,
 	}
 
 	// Declare Server config
-	server := &http.Server{
-		Addr:         fmt.Sprintf(":%d", NewServer.port),
-		Handler:      NewServer.RegisterRoutes(),
+	httpServer := &http.Server{
+		Addr:         fmt.Sprintf(":%d", s.port),
+		Handler:      s.RegisterRoutes(),
 		IdleTimeout:  time.Minute,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 30 * time.Second,
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 45 * time.Second,
 	}
 
-	return server
+	return httpServer
 }
