@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"kilimo/internal/auth"
 	"kilimo/internal/ml"
 	"kilimo/internal/nasa"
 	"kilimo/internal/rotation"
@@ -25,6 +26,7 @@ func setupTestServer() *Server {
 	soilSvc, _ := soil.NewService("../../training_data/kenya_regional_soil_data.csv")
 	mlEng := ml.NewEngine()
 	rotSvc := rotation.NewService(nasaSvc, soilSvc, mlEng)
+	authSvc := auth.NewService(soilSvc)
 
 	return &Server{
 		port:     8080,
@@ -33,6 +35,111 @@ func setupTestServer() *Server {
 		soil:     soilSvc,
 		ml:       mlEng,
 		rotation: rotSvc,
+		auth:     authSvc,
+	}
+}
+
+func TestFarmerSignUpAndFarmRequests(t *testing.T) {
+	s := setupTestServer()
+	handler := s.RegisterRoutes()
+
+	// 1. Sign up by farm location
+	signUpPayload := map[string]interface{}{
+		"email":           "farmer.kamau@kilimo.africa",
+		"password":        "secret123",
+		"name":            "Kamau Njoroge",
+		"farm_name":       "Green Valley Farm",
+		"farm_size_acres": 5.5,
+		"location": map[string]interface{}{
+			"latitude":           -0.3031,
+			"longitude":          36.0800,
+			"county_region":      "Nakuru",
+			"sub_county_village": "Njoro Sub-County",
+		},
+		"current_crop_history": []string{"maize", "maize"},
+		"priorities": map[string]interface{}{
+			"soil_organic_matter": 0.9,
+			"water_conservation":  0.85,
+			"nitrogen_fixing":     0.8,
+			"income_market_value": 0.75,
+		},
+	}
+	body, _ := json.Marshal(signUpPayload)
+	req, _ := http.NewRequest("POST", "/api/v1/auth/signup", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("expected 201 Created for signup, got %d, body: %s", rr.Code, rr.Body.String())
+	}
+
+	var authResp struct {
+		Token  string `json:"token"`
+		Farmer struct {
+			ID       string `json:"id"`
+			Location struct {
+				Latitude  float64 `json:"latitude"`
+				Longitude float64 `json:"longitude"`
+				Region    string  `json:"county_region"`
+			} `json:"location"`
+		} `json:"farmer"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &authResp); err != nil {
+		t.Fatalf("failed to decode signup response: %v", err)
+	}
+
+	if authResp.Token == "" {
+		t.Fatalf("expected non-empty token")
+	}
+	token := authResp.Token
+
+	// 2. Request profile using Token
+	req, _ = http.NewRequest("GET", "/api/v1/farm/profile", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rr = httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 for farm profile, got %d", rr.Code)
+	}
+
+	// 3. Request Farm Recommendations directly (uses registered farm location automatically)
+	req, _ = http.NewRequest("GET", "/api/v1/farm/recommendations", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rr = httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 for farm recommendations, got %d, body: %s", rr.Code, rr.Body.String())
+	}
+
+	var recResp map[string]interface{}
+	json.Unmarshal(rr.Body.Bytes(), &recResp)
+	if _, ok := recResp["rotation_report"]; !ok {
+		t.Fatalf("expected rotation_report in response")
+	}
+
+	// 4. Request Farm Vulnerability Diagnosis directly for registered farm
+	req, _ = http.NewRequest("GET", "/api/v1/farm/vulnerabilities", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rr = httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 for farm vulnerabilities, got %d", rr.Code)
+	}
+
+	// 5. Simulate climate perturbation for registered farm
+	simPayload := map[string]interface{}{
+		"rainfall_anomaly_pct":   -20.0,
+		"temperature_increase_c": 1.5,
+	}
+	simBody, _ := json.Marshal(simPayload)
+	req, _ = http.NewRequest("POST", "/api/v1/farm/simulate", bytes.NewBuffer(simBody))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	rr = httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 for farm simulate, got %d", rr.Code)
 	}
 }
 

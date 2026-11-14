@@ -1,0 +1,26 @@
+[GIN-debug] [WARNING] Creating an Engine instance with the Logger and Recovery middleware already attached.
+
+[GIN-debug] [WARNING] Running in "debug" mode. Switch to "release" mode in production.
+ - using env:	export GIN_MODE=release
+ - using code:	gin.SetMode(gin.ReleaseMode)
+
+[GIN-debug] GET    /                         --> kilimo/internal/server.(*Server).RootHandler-fm (4 handlers)
+[GIN-debug] GET    /health                   --> kilimo/internal/server.(*Server).HealthHandler-fm (4 handlers)
+[GIN-debug] POST   /api/v1/auth/signup       --> kilimo/internal/server.(*Server).SignUpHandler-fm (4 handlers)
+[GIN-debug] POST   /api/v1/auth/login        --> kilimo/internal/server.(*Server).LoginHandler-fm (4 handlers)
+[GIN-debug] GET    /api/v1/farm/profile      --> kilimo/internal/server.(*Server).GetFarmerProfileHandler-fm (5 handlers)
+[GIN-debug] PUT    /api/v1/farm/location     --> kilimo/internal/server.(*Server).UpdateFarmLocationHandler-fm (5 handlers)
+[GIN-debug] GET    /api/v1/farm/recommendations --> kilimo/internal/server.(*Server).GetFarmRecommendationsHandler-fm (5 handlers)
+[GIN-debug] GET    /api/v1/farm/vulnerabilities --> kilimo/internal/server.(*Server).GetFarmVulnerabilitiesHandler-fm (5 handlers)
+[GIN-debug] POST   /api/v1/farm/simulate     --> kilimo/internal/server.(*Server).SimulateFarmScenariosHandler-fm (5 handlers)
+[GIN-debug] GET    /api/v1/regions           --> kilimo/internal/server.(*Server).GetRegionsHandler-fm (4 handlers)
+[GIN-debug] GET    /api/v1/crops             --> kilimo/internal/server.(*Server).GetCropsHandler-fm (4 handlers)
+[GIN-debug] GET    /api/v1/crops/:id         --> kilimo/internal/server.(*Server).GetCropByIDHandler-fm (4 handlers)
+[GIN-debug] POST   /api/v1/nasa/observations --> kilimo/internal/server.(*Server).FetchNASAObservationsHandler-fm (4 handlers)
+[GIN-debug] GET    /api/v1/nasa/metrics-info --> kilimo/internal/server.(*Server).GetNASAMetricsInfoHandler-fm (4 handlers)
+[GIN-debug] POST   /api/v1/analyze/vulnerabilities --> kilimo/internal/server.(*Server).AnalyzeVulnerabilitiesHandler-fm (4 handlers)
+[GIN-debug] POST   /api/v1/ml/predict-crop-suitability --> kilimo/internal/server.(*Server).PredictCropSuitabilityHandler-fm (4 handlers)
+[GIN-debug] POST   /api/v1/ml/batch-predict  --> kilimo/internal/server.(*Server).BatchPredictHandler-fm (4 handlers)
+[GIN-debug] POST   /api/v1/rotations/recommend --> kilimo/internal/server.(*Server).RecommendRotationsHandler-fm (4 handlers)
+[GIN-debug] POST   /api/v1/rotations/simulate --> kilimo/internal/server.(*Server).SimulateScenariosHandler-fm (4 handlers)
+[GIN] 2026/11/14 - 19:44:49 | 200 |    4.423167ms |             ::1 | GET      "/health"

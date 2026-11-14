@@ -2,12 +2,14 @@ package server
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 
 	"kilimo/internal/crops"
 	"kilimo/internal/ml"
+	"kilimo/internal/models"
 	"kilimo/internal/nasa"
 	"kilimo/internal/rotation"
 )
@@ -15,7 +17,7 @@ import (
 func (s *Server) RegisterRoutes() http.Handler {
 	r := gin.Default()
 
-	// Robust CORS configuration for frontend and external clients
+	// Robust CORS configuration
 	r.Use(cors.New(cors.Config{
 		AllowOrigins:     []string{"http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173", "*"},
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"},
@@ -30,6 +32,21 @@ func (s *Server) RegisterRoutes() http.Handler {
 	// API v1 Group
 	v1 := r.Group("/api/v1")
 	{
+		// Farmer Auth & Farm Profile Setup (Sign up by Farm Location)
+		v1.POST("/auth/signup", s.SignUpHandler)
+		v1.POST("/auth/login", s.LoginHandler)
+
+		// Authenticated Farmer Farm-Specific Routes
+		farmerGroup := v1.Group("/farm")
+		farmerGroup.Use(s.AuthMiddleware())
+		{
+			farmerGroup.GET("/profile", s.GetFarmerProfileHandler)
+			farmerGroup.PUT("/location", s.UpdateFarmLocationHandler)
+			farmerGroup.GET("/recommendations", s.GetFarmRecommendationsHandler)
+			farmerGroup.GET("/vulnerabilities", s.GetFarmVulnerabilitiesHandler)
+			farmerGroup.POST("/simulate", s.SimulateFarmScenariosHandler)
+		}
+
 		// Agronomic & Soil Reference Endpoints
 		v1.GET("/regions", s.GetRegionsHandler)
 		v1.GET("/crops", s.GetCropsHandler)
@@ -46,7 +63,7 @@ func (s *Server) RegisterRoutes() http.Handler {
 		v1.POST("/ml/predict-crop-suitability", s.PredictCropSuitabilityHandler)
 		v1.POST("/ml/batch-predict", s.BatchPredictHandler)
 
-		// Crop Rotation Decision Support & Simulation Endpoints
+		// General Crop Rotation Decision Support & Simulation Endpoints
 		v1.POST("/rotations/recommend", s.RecommendRotationsHandler)
 		v1.POST("/rotations/simulate", s.SimulateScenariosHandler)
 	}
@@ -60,18 +77,21 @@ func (s *Server) RootHandler(c *gin.Context) {
 		"challenge":   "NASA Space Apps Challenge - Resilient Crop Rotations",
 		"description": "Decision-support API using NASA Earth observations (POWER, SMAP, ECOSTRESS, GPM, MODIS, SRTM, GRACE), local soil data, and Gorgonia machine learning to explore resilient crop rotation strategies.",
 		"status":      "online",
-		"version":     "1.0.0",
+		"version":     "1.1.0",
 		"endpoints": gin.H{
-			"health":              "GET /health",
-			"regions":             "GET /api/v1/regions",
-			"crops":               "GET /api/v1/crops",
-			"nasa_observations":   "POST /api/v1/nasa/observations",
-			"nasa_metrics_info":   "GET /api/v1/nasa/metrics-info",
-			"vulnerabilities":     "POST /api/v1/analyze/vulnerabilities",
-			"ml_predict":          "POST /api/v1/ml/predict-crop-suitability",
-			"ml_batch_predict":    "POST /api/v1/ml/batch-predict",
-			"rotations_recommend": "POST /api/v1/rotations/recommend",
-			"rotations_simulate":  "POST /api/v1/rotations/simulate",
+			"auth_signup":          "POST /api/v1/auth/signup (Sign up with farm location & soil)",
+			"auth_login":           "POST /api/v1/auth/login",
+			"farm_profile":         "GET  /api/v1/farm/profile (Bearer token auth)",
+			"farm_recommendations": "GET  /api/v1/farm/recommendations (Direct tailored strategies)",
+			"farm_vulnerabilities": "GET  /api/v1/farm/vulnerabilities",
+			"farm_simulate":        "POST /api/v1/farm/simulate",
+			"health":               "GET  /health",
+			"regions":              "GET  /api/v1/regions",
+			"crops":                "GET  /api/v1/crops",
+			"nasa_observations":    "POST /api/v1/nasa/observations",
+			"nasa_metrics_info":    "GET  /api/v1/nasa/metrics-info",
+			"rotations_recommend":  "POST /api/v1/rotations/recommend",
+			"rotations_simulate":   "POST /api/v1/rotations/simulate",
 		},
 	})
 }
@@ -82,9 +102,248 @@ func (s *Server) HealthHandler(c *gin.Context) {
 		"server":   "healthy",
 		"database": dbHealth,
 		"ml_engine": gin.H{
-			"backend": "Gorgonia Computation Graph",
+			"backend": "Gorgonia Neural Network (TapeMachine)",
 			"status":  "ready",
 		},
+	})
+}
+
+// AuthMiddleware validates the Authorization Bearer token header.
+func (s *Server) AuthMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		authHeader := c.GetHeader("Authorization")
+		if authHeader == "" {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Authorization header required (Bearer token)"})
+			return
+		}
+
+		parts := strings.Split(authHeader, " ")
+		if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid Authorization header format. Format: Bearer <token>"})
+			return
+		}
+
+		token := parts[1]
+		farmer, err := s.auth.AuthenticateToken(token)
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired session token"})
+			return
+		}
+
+		c.Set("farmer", farmer)
+		c.Next()
+	}
+}
+
+// SignUpHandler registers a farmer by farm location coordinates and local soil characteristics.
+func (s *Server) SignUpHandler(c *gin.Context) {
+	var req models.SignUpRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	profile, token, err := s.auth.SignUp(req)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusCreated, models.AuthResponse{
+		Token:   token,
+		Farmer:  *profile,
+		Message: "Farmer account successfully registered with farm geospatial location",
+	})
+}
+
+// LoginHandler logs in a farmer.
+func (s *Server) LoginHandler(c *gin.Context) {
+	var req models.LoginRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	profile, token, err := s.auth.Login(req)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, models.AuthResponse{
+		Token:   token,
+		Farmer:  *profile,
+		Message: "Authentication successful",
+	})
+}
+
+// GetFarmerProfileHandler returns the authenticated farmer's profile.
+func (s *Server) GetFarmerProfileHandler(c *gin.Context) {
+	val, exists := c.Get("farmer")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Farmer context not found"})
+		return
+	}
+	farmer := val.(*models.FarmerProfile)
+	c.JSON(http.StatusOK, farmer)
+}
+
+// UpdateFarmLocationHandler updates the farmer's registered farm location.
+func (s *Server) UpdateFarmLocationHandler(c *gin.Context) {
+	val, _ := c.Get("farmer")
+	farmer := val.(*models.FarmerProfile)
+
+	var req struct {
+		Location       models.FarmLocation        `json:"location" binding:"required"`
+		SoilAttributes *models.FarmSoilAttributes `json:"soil_attributes,omitempty"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	updated, err := s.auth.UpdateFarmLocation(farmer.ID, req.Location, req.SoilAttributes)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Farm location updated successfully",
+		"farmer":  updated,
+	})
+}
+
+// GetFarmRecommendationsHandler automatically generates tailored crop rotations using the farmer's registered farm location.
+func (s *Server) GetFarmRecommendationsHandler(c *gin.Context) {
+	val, _ := c.Get("farmer")
+	farmer := val.(*models.FarmerProfile)
+
+	// Build rotation request directly from registered farm location and soil
+	recReq := rotation.RecommendationRequest{
+		Latitude:        farmer.Location.Latitude,
+		Longitude:       farmer.Location.Longitude,
+		Region:          farmer.Location.CountyRegion,
+		CurrentRotation: farmer.CurrentCropHistory,
+		CustomSoilPH:    farmer.SoilPreferences.CustomPH,
+		CustomSoilOM:    farmer.SoilPreferences.CustomOMPct,
+		CustomTexture:   farmer.SoilPreferences.SoilTexture,
+		FarmerPriorities: rotation.FarmerPriorities{
+			SoilOrganicMatter: farmer.DefaultPriorities.SoilOrganicMatter,
+			WaterConservation: farmer.DefaultPriorities.WaterConservation,
+			NitrogenFixing:    farmer.DefaultPriorities.NitrogenFixing,
+			PestDisruption:    farmer.DefaultPriorities.PestDisruption,
+			IncomeMarketValue: farmer.DefaultPriorities.IncomeMarketValue,
+			ForageValue:       farmer.DefaultPriorities.ForageValue,
+			Equipment:         farmer.DefaultPriorities.EquipmentType,
+		},
+	}
+
+	report, err := s.rotation.GenerateRecommendations(c.Request.Context(), recReq)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"farm_id":         farmer.ID,
+		"farm_name":       farmer.FarmName,
+		"farm_location":   farmer.Location,
+		"rotation_report": report,
+	})
+}
+
+// GetFarmVulnerabilitiesHandler provides vulnerability analysis for the registered farm.
+func (s *Server) GetFarmVulnerabilitiesHandler(c *gin.Context) {
+	val, _ := c.Get("farmer")
+	farmer := val.(*models.FarmerProfile)
+
+	obs, err := s.nasa.FetchObservations(c.Request.Context(), farmer.Location.Latitude, farmer.Location.Longitude)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	soilProfile, _ := s.soil.GetProfile(farmer.Location.CountyRegion)
+
+	var bareMonths []string
+	var thermalStressPeriods []string
+	for _, m := range obs.Monthly {
+		if m.IsBareSoil {
+			bareMonths = append(bareMonths, m.Month)
+		}
+		if m.MaxTemperatureC > 30.0 || m.WaterDeficitMM < -30.0 {
+			thermalStressPeriods = append(thermalStressPeriods, m.Month)
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"farm_id":         farmer.ID,
+		"farm_name":       farmer.FarmName,
+		"location":        farmer.Location,
+		"soil_attributes": farmer.SoilPreferences,
+		"soil_baseline":   soilProfile,
+		"bare_soil_diagnosis": gin.H{
+			"bare_soil_months":       bareMonths,
+			"bare_soil_months_count": len(bareMonths),
+			"erosion_hazard":         obs.SRTM.RunoffHazard,
+		},
+		"climate_stress_diagnosis": gin.H{
+			"smap_drought_stress":    obs.SMAP.DroughtStressIndex,
+			"ecostress_heat_stress":  obs.ECOSTRESS.HeatStressCategory,
+			"thermal_stress_periods": thermalStressPeriods,
+			"shallow_root_risk":      obs.ECOSTRESS.ShallowRootVulnerability,
+		},
+	})
+}
+
+// SimulateFarmScenariosHandler runs perturbation simulations for the registered farm.
+func (s *Server) SimulateFarmScenariosHandler(c *gin.Context) {
+	val, _ := c.Get("farmer")
+	farmer := val.(*models.FarmerProfile)
+
+	var simReq struct {
+		RainfallAnomalyPct    float64 `json:"rainfall_anomaly_pct"`
+		TemperatureIncreaseC  float64 `json:"temperature_increase_c"`
+		DroughtFrequencyYears int     `json:"drought_frequency_years"`
+	}
+	if err := c.ShouldBindJSON(&simReq); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	sim := rotation.SimulationRequest{
+		RecommendationRequest: rotation.RecommendationRequest{
+			Latitude:        farmer.Location.Latitude,
+			Longitude:       farmer.Location.Longitude,
+			Region:          farmer.Location.CountyRegion,
+			CurrentRotation: farmer.CurrentCropHistory,
+			CustomSoilPH:    farmer.SoilPreferences.CustomPH,
+			CustomSoilOM:    farmer.SoilPreferences.CustomOMPct,
+			CustomTexture:   farmer.SoilPreferences.SoilTexture,
+			FarmerPriorities: rotation.FarmerPriorities{
+				SoilOrganicMatter: farmer.DefaultPriorities.SoilOrganicMatter,
+				WaterConservation: farmer.DefaultPriorities.WaterConservation,
+				NitrogenFixing:    farmer.DefaultPriorities.NitrogenFixing,
+				PestDisruption:    farmer.DefaultPriorities.PestDisruption,
+				IncomeMarketValue: farmer.DefaultPriorities.IncomeMarketValue,
+			},
+		},
+		RainfallAnomalyPct:    simReq.RainfallAnomalyPct,
+		TemperatureIncreaseC:  simReq.TemperatureIncreaseC,
+		DroughtFrequencyYears: simReq.DroughtFrequencyYears,
+	}
+
+	report, err := s.rotation.SimulateScenarios(c.Request.Context(), sim)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"farm_id":           farmer.ID,
+		"farm_name":         farmer.FarmName,
+		"simulation_report": report,
 	})
 }
 
@@ -178,7 +437,6 @@ func (s *Server) AnalyzeVulnerabilitiesHandler(c *gin.Context) {
 		current = []string{"maize", "maize"}
 	}
 
-	// Calculate bare soil periods and vulnerability
 	var bareMonths []string
 	var thermalStressPeriods []string
 	for _, m := range obs.Monthly {

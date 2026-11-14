@@ -9,6 +9,7 @@ import (
 
 	_ "github.com/joho/godotenv/autoload"
 
+	"kilimo/internal/auth"
 	"kilimo/internal/database"
 	"kilimo/internal/ml"
 	"kilimo/internal/nasa"
@@ -24,6 +25,7 @@ type Server struct {
 	soil     *soil.Service
 	ml       *ml.Engine
 	rotation *rotation.Service
+	auth     *auth.Service
 }
 
 func NewServer() *http.Server {
@@ -40,6 +42,7 @@ func NewServer() *http.Server {
 	soilSvc, _ := soil.NewService(soilCsv)
 	mlEngine := ml.NewEngine()
 	rotationSvc := rotation.NewService(nasaSvc, soilSvc, mlEngine)
+	authSvc := auth.NewService(soilSvc)
 
 	s := &Server{
 		port:     port,
@@ -48,6 +51,7 @@ func NewServer() *http.Server {
 		soil:     soilSvc,
 		ml:       mlEngine,
 		rotation: rotationSvc,
+		auth:     authSvc,
 	}
 
 	// Declare Server config
