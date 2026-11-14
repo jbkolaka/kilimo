@@ -372,7 +372,7 @@ class CProgressStep extends StatelessWidget {
       splashColor: Colors.transparent,
       highlightColor: Colors.transparent,
       child: Container(
-        constraints: const BoxConstraints(minWidth: _Styles.minStepWidth),
+        width: _Styles.minStepWidth,
         padding: const EdgeInsets.only(right: Spacing.v16px1remSpacing05),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -381,7 +381,7 @@ class CProgressStep extends StatelessWidget {
             // Top connecting line
             Container(
               height: _Styles.lineThickness,
-              width: double.infinity,
+              width: _Styles.minStepWidth,
               color: isLast ? Colors.transparent : lineColor,
               margin: const EdgeInsets.only(bottom: Spacing.v8px05remSpacing03),
             ),

@@ -29,6 +29,7 @@ class CLineChart extends StatefulWidget {
     String? title,
     String? xAxisLabel,
     List<String> xAxisLabels = const <String>[],
+    List<int>? xAxisTickIndices,
     String? yAxisLabel,
     bool showLegend = true,
     bool showGridLines = true,
@@ -36,6 +37,7 @@ class CLineChart extends StatefulWidget {
     bool showDataPoints = true,
     bool curveSmooth = false,
     double height = 300,
+    bool removePadding = false,
     void Function(CLineChartSeries series, CLineChartPoint point)? onPointTap,
   }) {
     return CLineChart(
@@ -48,6 +50,7 @@ class CLineChart extends StatefulWidget {
         title: title,
         xAxisLabel: xAxisLabel,
         xAxisLabels: xAxisLabels,
+        xAxisTickIndices: xAxisTickIndices,
         yAxisLabel: yAxisLabel,
         showLegend: showLegend,
         showGridLines: showGridLines,
@@ -55,6 +58,7 @@ class CLineChart extends StatefulWidget {
         showDataPoints: showDataPoints,
         curveSmooth: curveSmooth,
         height: height,
+        removePadding: removePadding,
         onPointTap: onPointTap,
       ),
     );
@@ -68,12 +72,14 @@ class CLineChart extends StatefulWidget {
 }
 
 class _CLineChartState extends State<CLineChart> {
-  _HoveredPoint? _hoveredPoint;
   final Set<String> _hiddenSeries = <String>{};
+  _HoveredPoint? _hoveredPoint;
 
-  List<CLineChartSeries> get _visibleSeries => widget.props.series
-      .where((s) => !_hiddenSeries.contains(s.name))
-      .toList();
+  List<CLineChartSeries> get _visibleSeries {
+    return widget.props.series
+        .where((s) => !_hiddenSeries.contains(s.name))
+        .toList();
+  }
 
   void _toggleSeries(String seriesName) {
     setState(() {
@@ -91,7 +97,13 @@ class _CLineChartState extends State<CLineChart> {
   }
 
   void _onHover(Offset localPosition, Size canvasSize, List<Color> palette) {
-    final chartRect = _calculateChartRect(canvasSize);
+    final chartRect = _calculateChartRect(
+      canvasSize,
+      removePadding: widget.props.removePadding,
+      hasXAxisLabel:
+          widget.props.xAxisLabel != null &&
+          widget.props.xAxisLabel!.isNotEmpty,
+    );
     if (!chartRect.contains(localPosition)) {
       if (_hoveredPoint != null) {
         setState(() => _hoveredPoint = null);
@@ -165,8 +177,10 @@ class _CLineChartState extends State<CLineChart> {
 
         return Container(
           width: chartWidth,
-          padding: const EdgeInsets.symmetric(
-            vertical: Spacing.v12px075remSpacing04,
+          padding: EdgeInsets.symmetric(
+            vertical: widget.props.removePadding
+                ? 4.0
+                : Spacing.v12px075remSpacing04,
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -244,24 +258,27 @@ class _CLineChartState extends State<CLineChart> {
     return Wrap(
       spacing: CLineChartStyles.legendSpacing,
       runSpacing: Spacing.v8px05remSpacing03,
-      children: [
-        for (int i = 0; i < widget.props.series.length; i++) ...[
-          _LegendItem(
-            name: widget.props.series[i].name,
-            color: widget.props.series[i].color ?? palette[i % palette.length],
-            textColor: tokens.textSecondary,
-            isDisabled: _hiddenSeries.contains(widget.props.series[i].name),
-            onTap: () => _toggleSeries(widget.props.series[i].name),
-          ),
-        ],
-      ],
+      children: List.generate(widget.props.series.length, (index) {
+        final series = widget.props.series[index];
+        final color = series.color ?? palette[index % palette.length];
+        final isDisabled = _hiddenSeries.contains(series.name);
+
+        return _LegendItem(
+          name: series.name,
+          color: color,
+          textColor: tokens.textSecondary,
+          isDisabled: isDisabled,
+          onTap: () => _toggleSeries(series.name),
+        );
+      }),
     );
   }
 
   Widget _buildTooltip(AppThemeTokens tokens, Size canvasSize) {
-    final hp = _hoveredPoint!;
-    final pos = hp.canvasPosition;
+    final hp = _hoveredPoint;
+    if (hp == null) return const SizedBox.shrink();
 
+    final pos = hp.canvasPosition;
     const tooltipWidth = 150.0;
     const tooltipHeight = 68.0;
 
@@ -277,10 +294,10 @@ class _CLineChartState extends State<CLineChart> {
     }
 
     final xLabel =
-        hp.point.label ??
-        (widget.props.xAxisLabels.length > hp.pointIndex
-            ? widget.props.xAxisLabels[hp.pointIndex]
-            : _formatValue(hp.point.x));
+        (widget.props.xAxisLabels.length > hp.pointIndex &&
+            widget.props.xAxisLabels[hp.pointIndex].isNotEmpty)
+        ? widget.props.xAxisLabels[hp.pointIndex]
+        : (hp.point.label ?? _formatValue(hp.point.x));
 
     return Positioned(
       left: left,
@@ -347,6 +364,7 @@ class _CLineChartState extends State<CLineChart> {
                 ),
               ),
               if (widget.props.variant == CLineChartVariant.stacked) ...[
+                const SizedBox(height: 2),
                 Text(
                   'Cumulative: ${_formatValue(hp.renderedY)}',
                   style: TextStyle(
@@ -433,32 +451,19 @@ class _HoveredPoint {
   final Color seriesColor;
   final Offset canvasPosition;
   final int pointIndex;
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is _HoveredPoint &&
-          runtimeType == other.runtimeType &&
-          series.name == other.series.name &&
-          point.x == other.point.x &&
-          point.y == other.point.y &&
-          pointIndex == other.pointIndex;
-
-  @override
-  int get hashCode => Object.hash(series.name, point.x, point.y, pointIndex);
 }
 
-class _ProcessedPoint {
-  const _ProcessedPoint({
+class _RenderPoint {
+  const _RenderPoint({
     required this.x,
-    required this.baselineY,
     required this.renderY,
+    required this.baselineY,
     required this.originalPoint,
   });
 
   final double x;
-  final double baselineY;
   final double renderY;
+  final double baselineY;
   final CLineChartPoint originalPoint;
 }
 
@@ -469,67 +474,84 @@ class _ProcessedSeries {
   });
 
   final CLineChartSeries originalSeries;
-  final List<_ProcessedPoint> renderPoints;
+  final List<_RenderPoint> renderPoints;
 }
 
 List<_ProcessedSeries> _processSeries(
-  List<CLineChartSeries> seriesList,
+  List<CLineChartSeries> series,
   CLineChartVariant variant,
 ) {
-  if (seriesList.isEmpty) return const [];
+  if (series.isEmpty) return const [];
 
   if (variant != CLineChartVariant.stacked) {
-    return seriesList.map((s) {
-      final sortedPoints = List<CLineChartPoint>.from(s.points)
-        ..sort((a, b) => a.x.compareTo(b.x));
-      return _ProcessedSeries(
-        originalSeries: s,
-        renderPoints: sortedPoints
-            .map(
-              (p) => _ProcessedPoint(
-                x: p.x,
-                baselineY: 0.0,
-                renderY: p.y,
-                originalPoint: p,
-              ),
-            )
-            .toList(),
-      );
+    return series.map((s) {
+      final points = s.points
+          .map(
+            (p) => _RenderPoint(
+              x: p.x,
+              renderY: p.y,
+              baselineY: 0.0,
+              originalPoint: p,
+            ),
+          )
+          .toList();
+      return _ProcessedSeries(originalSeries: s, renderPoints: points);
     }).toList();
   }
 
-  // Stacked variant: align points across shared X coordinates
-  final uniqueX = <double>{};
-  for (final s in seriesList) {
+  final xKeys = <double>{};
+  for (final s in series) {
     for (final p in s.points) {
-      uniqueX.add(p.x);
+      xKeys.add(p.x);
     }
   }
-  final sortedX = uniqueX.toList()..sort();
+  final sortedX = xKeys.toList()..sort();
 
-  final cumulativeY = {for (final x in sortedX) x: 0.0};
+  final pointLookup = <String, CLineChartPoint>{};
+  for (int sIdx = 0; sIdx < series.length; sIdx++) {
+    for (final p in series[sIdx].points) {
+      pointLookup['${sIdx}_${p.x}'] = p;
+    }
+  }
+
+  final cumulativePos = <double, double>{for (final x in sortedX) x: 0.0};
+  final cumulativeNeg = <double, double>{for (final x in sortedX) x: 0.0};
   final result = <_ProcessedSeries>[];
 
-  for (final s in seriesList) {
-    final pointMap = {for (final p in s.points) p.x: p};
-    final renderPoints = <_ProcessedPoint>[];
+  for (int sIdx = 0; sIdx < series.length; sIdx++) {
+    final s = series[sIdx];
+    final renderPoints = <_RenderPoint>[];
 
     for (final x in sortedX) {
-      final origPoint = pointMap[x] ?? CLineChartPoint(x: x, y: 0.0);
-      final prevCum = cumulativeY[x]!;
-      final nextCum = prevCum + origPoint.y;
-      cumulativeY[x] = nextCum;
+      final orig = pointLookup['${sIdx}_$x'] ?? CLineChartPoint(x: x, y: 0.0);
+      final y = orig.y;
 
-      renderPoints.add(
-        _ProcessedPoint(
-          x: x,
-          baselineY: prevCum,
-          renderY: nextCum,
-          originalPoint: origPoint,
-        ),
-      );
+      if (y >= 0) {
+        final base = cumulativePos[x]!;
+        final top = base + y;
+        cumulativePos[x] = top;
+        renderPoints.add(
+          _RenderPoint(
+            x: x,
+            renderY: top,
+            baselineY: base,
+            originalPoint: orig,
+          ),
+        );
+      } else {
+        final base = cumulativeNeg[x]!;
+        final bottom = base + y;
+        cumulativeNeg[x] = bottom;
+        renderPoints.add(
+          _RenderPoint(
+            x: x,
+            renderY: bottom,
+            baselineY: base,
+            originalPoint: orig,
+          ),
+        );
+      }
     }
-
     result.add(_ProcessedSeries(originalSeries: s, renderPoints: renderPoints));
   }
 
@@ -589,14 +611,22 @@ _ChartBounds? _calculateBounds(List<_ProcessedSeries> series) {
   return _ChartBounds(minX: minX, maxX: maxX, minY: minY, maxY: maxY);
 }
 
-Rect _calculateChartRect(Size size) {
-  const topPadding = 16.0;
-  const rightPadding = 16.0;
+Rect _calculateChartRect(
+  Size size, {
+  bool removePadding = false,
+  bool hasXAxisLabel = false,
+}) {
+  final topPadding = removePadding ? 8.0 : 16.0;
+  final rightPadding = removePadding ? 0.0 : 16.0;
+  final yGutter = removePadding ? 32.0 : CLineChartStyles.yAxisGutter;
+  final xGutter = hasXAxisLabel
+      ? 32.0
+      : (removePadding ? 22.0 : CLineChartStyles.xAxisGutter);
   return Rect.fromLTRB(
-    CLineChartStyles.yAxisGutter,
+    yGutter,
     topPadding,
-    math.max(CLineChartStyles.yAxisGutter + 20, size.width - rightPadding),
-    math.max(topPadding + 20, size.height - CLineChartStyles.xAxisGutter),
+    math.max(yGutter + 20, size.width - rightPadding),
+    math.max(topPadding + 20, size.height - xGutter),
   );
 }
 
@@ -639,7 +669,11 @@ class _LineChartPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final chartRect = _calculateChartRect(size);
+    final chartRect = _calculateChartRect(
+      size,
+      removePadding: props.removePadding,
+      hasXAxisLabel: props.xAxisLabel != null && props.xAxisLabel!.isNotEmpty,
+    );
     final processed = _processSeries(visibleSeries, props.variant);
     final bounds = _calculateBounds(processed);
 
@@ -788,13 +822,44 @@ class _LineChartPainter extends CustomPainter {
     // X-axis tick labels
     if (props.xAxisLabels.isNotEmpty) {
       final labelCount = props.xAxisLabels.length;
-      for (int i = 0; i < labelCount; i++) {
+      final List<int> tickIndices;
+      if (props.xAxisTickIndices != null &&
+          props.xAxisTickIndices!.isNotEmpty) {
+        tickIndices = props.xAxisTickIndices!
+            .where((idx) => idx >= 0 && idx < labelCount)
+            .toList();
+      } else if (labelCount > 6) {
+        // Automatically thin ticks if too many labels to avoid squeezing
+        final step = (labelCount - 1) / 4.0;
+        final raw = [
+          0,
+          (step * 1).round(),
+          (step * 2).round(),
+          (step * 3).round(),
+          labelCount - 1,
+        ];
+        tickIndices = raw.toSet().toList()..sort();
+      } else {
+        tickIndices = List.generate(labelCount, (i) => i);
+      }
+
+      for (final i in tickIndices) {
+        final label = props.xAxisLabels[i];
+        if (label.isEmpty) continue;
+
         final t = labelCount > 1 ? i / (labelCount - 1) : 0.5;
         final xPos = chartRect.left + (t * chartRect.width);
 
+        // Tick mark on baseline
+        canvas.drawLine(
+          Offset(xPos, chartRect.bottom),
+          Offset(xPos, chartRect.bottom + 4),
+          axisPaint,
+        );
+
         final textPainter = TextPainter(
           text: TextSpan(
-            text: props.xAxisLabels[i],
+            text: label,
             style: TextStyle(
               color: tokens.textSecondary,
               fontSize: 11,
@@ -805,10 +870,19 @@ class _LineChartPainter extends CustomPainter {
           textAlign: TextAlign.center,
         )..layout();
 
-        textPainter.paint(
-          canvas,
-          Offset(xPos - (textPainter.width / 2), chartRect.bottom + 6),
-        );
+        double labelX = xPos - (textPainter.width / 2);
+        if (i == 0 || xPos <= chartRect.left + 1) {
+          labelX = chartRect.left;
+        } else if (i == labelCount - 1 || xPos >= chartRect.right - 1) {
+          labelX = chartRect.right - textPainter.width;
+        } else {
+          labelX = labelX.clamp(
+            chartRect.left,
+            chartRect.right - textPainter.width,
+          );
+        }
+
+        textPainter.paint(canvas, Offset(labelX, chartRect.bottom + 6));
       }
     } else {
       const xTickCount = 4;
@@ -816,6 +890,12 @@ class _LineChartPainter extends CustomPainter {
         final t = i / xTickCount;
         final xPos = chartRect.left + (t * chartRect.width);
         final val = bounds.minX + (t * (bounds.maxX - bounds.minX));
+
+        canvas.drawLine(
+          Offset(xPos, chartRect.bottom),
+          Offset(xPos, chartRect.bottom + 4),
+          axisPaint,
+        );
 
         final textPainter = TextPainter(
           text: TextSpan(
@@ -830,10 +910,14 @@ class _LineChartPainter extends CustomPainter {
           textAlign: TextAlign.center,
         )..layout();
 
-        textPainter.paint(
-          canvas,
-          Offset(xPos - (textPainter.width / 2), chartRect.bottom + 6),
-        );
+        double labelX = xPos - (textPainter.width / 2);
+        if (i == 0) {
+          labelX = chartRect.left;
+        } else if (i == xTickCount) {
+          labelX = chartRect.right - textPainter.width;
+        }
+
+        textPainter.paint(canvas, Offset(labelX, chartRect.bottom + 6));
       }
     }
   }

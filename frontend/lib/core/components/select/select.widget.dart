@@ -82,7 +82,9 @@ class _CSelectState<T> extends State<CSelect<T>> {
 
   @override
   void dispose() {
-    _closeMenu();
+    _overlayEntry?.remove();
+    _overlayEntry?.dispose();
+    _overlayEntry = null;
     super.dispose();
   }
 

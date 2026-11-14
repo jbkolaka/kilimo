@@ -1,6 +1,7 @@
 export './alerts/index.dart';
 export './avatar/index.dart';
 export './badge/index.dart';
+export './bottom_app_bar/index.dart';
 export './link/index.dart';
 export './text_field/index.dart';
 export './tile/index.dart';
@@ -18,3 +19,7 @@ export './overflow_menu/index.dart';
 export './inherited_styles/index.dart';
 export './icon/index.dart';
 export './ui_shell/index.dart';
+export './progress_bar/index.dart';
+export './progress_indicator/index.dart';
+export './line_chart/index.dart';
+export './select/index.dart';

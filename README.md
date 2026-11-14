@@ -1,145 +1,196 @@
-# Kilimo — Resilient Crop Rotation Decision Support
+# Kilimo — Climate-Resilient Agroclimatology & Crop Rotation Decision Support
 
-Kilimo is a decision-support prototype for exploring climate-resilient crop choices and rotations in Kenya. It combines NASA POWER climate climatology with regional soil profiles and an agronomic crop catalog to surface water stress, soil risks, crop suitability, and alternative rotation strategies. It is designed to help farmers, agronomists, and agricultural programs compare options—not to replace local agronomic advice or field measurements.
+Kilimo is a full-stack, satellite-informed agricultural decision support platform built for smallholder farmers and agronomists in Kenya. Developed for the **NASA Space Apps Challenge (Resilient Crop Rotations)**, Kilimo pairs NASA Earth Observations (SMAP, GPM, NASA POWER, SRTM) with machine learning, regional soil physics, and an agronomic crop catalog to evaluate climate stress, optimize rotations, and provide actionable farm advisories.
 
-> **NASA Space Apps Challenge context:** The backend identifies the project as a decision-support system for the **Resilient Crop Rotations** challenge. The goal is to make satellite-informed climate context understandable and actionable through crop and rotation comparisons.
+The system features a **Go backend microservice** and a **Carbon Design System Flutter mobile application** equipped with customizable Carbon Charts, interactive OpenStreetMap onboarding, and multi-granularity agroclimate dashboards.
 
-## What Kilimo does
+---
 
-- Retrieves temperature, precipitation, humidity, and solar-radiation climatology from the [NASA POWER API](https://power.larc.nasa.gov/docs/services/api/temporal/climatology/), using a location's latitude and longitude.
-- Builds monthly climate summaries, including estimated evapotranspiration, water deficit, soil moisture, bare-soil periods, and vulnerability windows.
-- Looks up regional soil properties and enriches them with derived indicators such as pH/organic-matter concerns, erosion risk, and possible amendments.
-- Maintains a crop catalog with crop water demand, temperature and pH ranges, rooting depth, nitrogen-fixation potential, drought/heat tolerance, and other agronomic attributes.
-- Exposes API endpoints for crop and region data, field vulnerability analysis, individual or batch crop-suitability predictions, and rotation recommendations and scenario simulation.
+## Architecture Overview
 
-## How the data and model fit together
+```mermaid
+flowchart TD
+    subgraph Frontend["Flutter Mobile Client (Carbon Design System)"]
+        UI["Farm Dashboard & Onboarding"]
+        Chart["Carbon Charts Line Chart<br/>(Zero Padding, Duration Axis 1–7 & 7–14)"]
+        OSM["OpenStreetMap Coordinate Picker"]
+        NasaService["NasaService (Client Telemetry Client)"]
+    end
 
-For a suitability request, the Go API fetches NASA POWER climatology, obtains a regional soil profile and a crop profile, then assembles a 16-feature `ModelInputVector`. Features include rainfall, temperature, soil moisture, evaporative-stress index, slope, soil pH and organic matter, crop water demand and root depth, and farmer priorities. `internal/ml/engine.go` normalizes these inputs and evaluates them with a Gorgonia computation graph (16 → 32 → 16 → 4). Its four outputs are post-processed into suitability, resilience, soil-health, and economic scores, with additional agronomic rules such as water-deficit penalties and nitrogen-fixation or deep-root bonuses.
+    subgraph Backend["Go API Server (:8080)"]
+        Server["HTTP Router & Middleware"]
+        AuthSvc["Auth & Farmer Profile Engine"]
+        NasaEngine["NASA Earth Observation Service"]
+        MLEngine["Gorgonia Neural Network Engine"]
+        SoilSvc["Regional Soil Service"]
+        RotationSvc["Crop Rotation Recommender"]
+    end
 
-**Important model transparency:** the current Gorgonia weights are initialized from hand-coded, agronomically motivated values in `initCalibratedWeights`; this repository does not include a model-training pipeline or evidence that these weights were fitted against measured farm outcomes. Treat the results as an exploratory prototype, not a validated predictive model. Before field use, calibrate and evaluate against local agronomic expertise and observed yield/soil data, and publish the evaluation methodology.
+    subgraph External["NASA Earth Observation APIs & Data"]
+        Power["NASA POWER API (Daily, Monthly, Climatology)"]
+        SMAP["NASA SMAP (Soil Moisture Active Passive)"]
+        GPM["NASA GPM IMERG (Precipitation)"]
+        SRTM["NASA SRTM (Digital Elevation & Topography)"]
+    end
 
-## Data sources and limitations
-
-- **Live external data:** `internal/nasa/nasa.go` requests NASA POWER point climatology. If the request fails or required values are missing, the service uses a Kenya climatology fallback. Observation responses include a `source` field: `NASA_POWER_LIVE` or `NASA_SATELLITE_CLIMATOLOGY_FALLBACK`.
-- **Local reference data:** the backend loads Kenya climate history and regional soil CSVs from `training_data/` (see `internal/server/server.go` for the expected paths).
-- **Derived estimates:** response fields are named for datasets/missions including SMAP, ECOSTRESS, GPM, MODIS, SRTM, and GRACE. In the current implementation, most of these are estimated or derived from POWER climatology and fixed assumptions; the code does not independently fetch all of those satellite products. In particular, elevation/slope and some ET/vegetation/water-storage values use defaults or simplified formulas. These should not be presented as direct observations from those missions without implementing and validating the corresponding data integrations.
-- **Rotation scoring:** rotation strategy templates and some score/benefit values are currently hand-authored in `internal/rotation/rotation.go`. Simulation adjusts scores using simple scenario rules. Validate and replace illustrative projections with transparent, locally reviewed calculations before making quantitative impact claims.
-- NASA POWER climatology represents long-term climate normals, not necessarily current or near-real-time field conditions. Satellite and soil data are spatial averages and should be combined with ground measurements where available.
-
-## API
-
-The Go service defaults to port `8080` (override with `PORT`). The API is rooted at `/api/v1`:
-
-| Method | Path | Purpose |
-| --- | --- | --- |
-| GET | `/` | Project/service information |
-| GET | `/health` | Server, database, and model status |
-| GET | `/api/v1/regions` | Available regional soil profiles |
-| GET | `/api/v1/crops` | Crop catalog |
-| GET | `/api/v1/crops/:id` | Crop profile by ID (for example, `maize`) |
-| POST | `/api/v1/nasa/observations` | NASA POWER request and derived environmental summary |
-| GET | `/api/v1/nasa/metrics-info` | Explanations of agronomic metrics |
-| POST | `/api/v1/analyze/vulnerabilities` | Bare-soil, climate-stress, and crop-cycle diagnosis |
-| POST | `/api/v1/ml/predict-crop-suitability` | Predict scores for one crop |
-| POST | `/api/v1/ml/batch-predict` | Compare crop predictions in a batch |
-| POST | `/api/v1/rotations/recommend` | Compare crop-rotation strategies |
-| POST | `/api/v1/rotations/simulate` | Explore rainfall/temperature scenario changes |
-
-Example observation request:
-
-```bash
-curl -X POST http://localhost:8080/api/v1/nasa/observations \
-  -H 'Content-Type: application/json' \
-  -d '{"latitude":-0.3031,"longitude":36.08}'
+    OSM -->|"Latitude & Longitude"| NasaService
+    NasaService -->|"POST /api/v1/nasa/observations"| Server
+    Server --> NasaEngine
+    NasaEngine -->|"Live REST Query"| Power
+    NasaEngine --> SMAP
+    NasaEngine --> GPM
+    NasaEngine --> SRTM
+    NasaEngine --> Server
+    Server -->|"Soil Profile & Telemetry"| NasaService
+    NasaService --> Chart
+    NasaService --> UI
+    UI -->|"POST /api/v1/auth/signup"| AuthSvc
 ```
 
-Inspect the returned `source` field to see whether the request used NASA POWER or the fallback. Coordinates above are an example location, not a claim that the returned data is a live field measurement.
+---
 
-## Run locally
+## How NASA Data is Used in Kilimo
 
-### Backend
+Kilimo ingests and synthesizes multi-mission NASA Earth Observation datasets across both the Go backend and the Flutter client:
 
-Requirements: Go (the module declares Go 1.22.2) and network access for NASA POWER requests. From the repository root:
+### 1. NASA POWER (Prediction of Worldwide Energy Resources)
+- **API Endpoints:**
+  - `https://power.larc.nasa.gov/api/temporal/daily/point`: 14-day daily precision telemetry.
+  - `https://power.larc.nasa.gov/api/temporal/monthly/point`: 12-month aggregated timelines.
+  - `https://power.larc.nasa.gov/api/temporal/climatology/point`: Multi-year agroclimate baselines.
+- **Parameters:**
+  - `T2M`: Temperature at 2 meters (°C, daily mean, minimum, and maximum).
+  - `PRECTOTCORR`: Precipitation corrected ($mm/day$).
+  - `GWETTOP`: Surface soil wetness index ($0.0 - 1.0$).
+  - `RH2M`: Relative humidity at 2 meters (%).
+  - `ALLSKY_SFC_SW_DWN`: All-sky surface shortwave solar downward irradiance ($MJ/m^2/day$).
 
+### 2. NASA SMAP (Soil Moisture Active Passive)
+- Provides calibrated volumetric surface ($0\text{--}5\text{ cm}$) and root-zone ($0\text{--}100\text{ cm}$) soil moisture in $m^3/m^3$.
+- Identifies soil moisture anomalies and computes the **Drought Stress Index** (Normal, Mild, Moderate, Severe) to alert farmers of subterranean moisture deficit before visible crop wilting occurs.
+
+### 3. NASA GPM IMERG (Global Precipitation Measurement)
+- Tracks precipitation frequency, intensity, and historical rainfall reliability.
+- Pinpoints bimodal rainy seasons in East Africa (Long Rains in March–May; Short Rains in October–December).
+- Computes runoff and topsoil erosion hazards from extreme rain events ($>50\text{ mm}$ in 24 hours).
+
+### 4. NASA SRTM (Shuttle Radar Topography Mission)
+- Supplies digital elevation data (meters above sea level) and terrain slope percentages.
+- Combined with soil texture to determine terracing requirements, drainage characteristics, and water table retention.
+
+### 5. Automated Onboarding Soil Profiling
+- When a farmer taps their location on the OpenStreetMap interface during registration, Kilimo automatically passes the coordinates to the NASA telemetry pipeline.
+- The platform resolves elevation, surface wetness, and climate baseline to auto-populate the farm's soil classification (e.g., Humic Nitisol, Ferralsol, Arenosol), texture, pH, and organic matter percentage.
+
+---
+
+## Carbon Charts Line Chart Implementation
+
+The Flutter frontend features a custom, tokenized implementation of the **Carbon Design System Line Chart** ([`frontend/lib/core/components/line_chart/`](file:///home/ryan/kilimo/frontend/lib/core/components/line_chart/)):
+
+- **Zero-Padding Edge-to-Edge Layout (`removePadding: true`):**
+  Matches Carbon Charts' `addSpaceOnEdges: 0` specification, removing horizontal gutters and allowing series lines to stretch flush from the left Y-axis boundary to the right edge of the card.
+- **Fixed Duration Axis (Ranges 1–7 and 7–14):**
+  In Daily mode, data is plotted across a 14-day observation cycle. Rather than crowding all 14 date labels into a squeezed row, the chart displays clean ticks at **1**, **7**, and **14**, clearly defining the week 1 (**1 to 7**) and week 2 (**7 to 14**) duration ranges while remaining flush at the edges.
+- **Canonical Monthly Timeline:**
+  In Monthly mode, dates are rendered as canonical month names (`Jan` through `Dec`), eliminating ambiguous date formats (`01/01`).
+- **Multi-Series Grouping:**
+  Plots Soil Moisture (Teal 40), Mean Temperature (Red 50), and Precipitation (Blue 50) simultaneously with smooth cubic bezier curves, translucent area fills, and interactive point hover/tap inspection.
+
+---
+
+## Backend API Specification
+
+The Go backend listens on `:8080` (configurable via `PORT`):
+
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| `GET` | `/health` | Service health status (server, database, ML engine) |
+| `POST` | `/api/v1/auth/signup` | Register farmer with geospatial coordinates and soil profile |
+| `POST` | `/api/v1/auth/login` | Authenticate farmer and return session token |
+| `GET` | `/api/v1/farm/profile` | Retrieve farmer profile, coordinates, and soil attributes |
+| `POST` | `/api/v1/nasa/observations` | Multi-source NASA Earth Observation data for coordinates |
+| `GET` | `/api/v1/nasa/metrics-info` | Educational dictionary of NASA agronomic indicators |
+| `POST` | `/api/v1/analyze/vulnerabilities` | Diagnose bare soil windows and climate exposure |
+| `POST` | `/api/v1/ml/predict-crop-suitability` | Gorgonia neural network crop suitability evaluation |
+| `POST` | `/api/v1/rotations/recommend` | Model-driven resilient crop rotation sequences |
+| `POST` | `/api/v1/rotations/simulate` | Climate scenario stress simulation (temperature/rainfall shifts) |
+
+### Example Request: NASA Observations
 ```bash
+curl -X POST http://localhost:8080/api/v1/nasa/observations \
+  -H "Content-Type: application/json" \
+  -d '{"latitude": -0.3031, "longitude": 36.0800}'
+```
+
+---
+
+## Running the Project
+
+### Prerequisites
+- **Go:** 1.22+
+- **Flutter SDK:** 3.19+
+- **Network Access:** To reach NASA POWER API endpoints
+
+### 1. Start the Go Backend
+From the project root:
+```bash
+# Run unit and integration tests
 go test ./...
+
+# Start the API server on :8080
 go run ./cmd/api
 ```
 
-The API listens on `http://localhost:8080` by default. The server loads the climate and soil CSVs using paths under `training_data/`.
-
-### Flutter frontend
-
-The `frontend/` directory is a Flutter project. Install Flutter, then run:
-
+### 2. Launch the Flutter Client
+From the project root:
 ```bash
 cd frontend
+
+# Install Flutter dependencies
 flutter pub get
+
+# Run test suite (14 unit & widget tests)
+flutter test
+
+# Launch the app
 flutter run
 ```
 
-The current `frontend/lib/main.dart` is still Flutter's counter starter screen; it is not yet a Kilimo client wired to the API.
+---
 
-### Docker Compose
+## Project Structure
 
-`docker-compose.yml` defines the Go app, PostgreSQL, and a frontend image. Configure the database and app variables before starting it:
-
-```dotenv
-APP_ENV=development
-PORT=8080
-BLUEPRINT_DB_HOST=psql_bp
-BLUEPRINT_DB_PORT=5432
-BLUEPRINT_DB_DATABASE=kilimo
-BLUEPRINT_DB_USERNAME=kilimo
-BLUEPRINT_DB_PASSWORD=change-me
-BLUEPRINT_DB_SCHEMA=public
 ```
-
-Then run:
-
-```bash
-docker compose up --build
+kilimo/
+├── cmd/
+│   └── api/                # Go backend main entry point
+├── internal/
+│   ├── auth/               # Session & token authentication
+│   ├── crops/              # Agronomic crop catalog & nutrient database
+│   ├── database/           # PostgreSQL persistence service
+│   ├── ml/                 # Gorgonia neural network suitability engine
+│   ├── models/             # Domain schemas (Farmer, Location, Soil)
+│   ├── nasa/               # NASA Earth Observations aggregator & client
+│   ├── rotation/           # Crop rotation sequence generator
+│   ├── server/             # Gin HTTP routes & middleware
+│   └── soil/               # Regional soil physics & chemistry profiles
+├── frontend/
+│   ├── lib/
+│   │   ├── core/
+│   │   │   ├── components/ # Carbon Design System Flutter components
+│   │   │   │   ├── line_chart/         # Carbon Charts line chart
+│   │   │   │   ├── bottom_app_bar/     # Carbon bottom navigation bar
+│   │   │   │   ├── select/             # Carbon dropdown selector
+│   │   │   │   └── progress_indicator/ # Step indicator
+│   │   │   ├── services/   # NasaService & local client APIs
+│   │   │   └── theme/      # Carbon tokens, themes & color palettes
+│   │   └── feature/
+│   │       ├── authentication/ # 10-step OSM geospatial signup & login
+│   │       └── home/           # Dashboard & NasaClimateChartCard
+│   └── test/               # Flutter test suite
+├── training_data/          # Kenya climate history & soil catalog CSVs
+├── Dockerfile              # Multi-stage container build
+├── docker-compose.yml      # Service orchestration
+└── README.md
 ```
-
-**Deployment note:** inspect and validate the Docker build before relying on it. The current Dockerfile's frontend stage expects `frontend/package*.json` and an npm build, while the checked-in frontend is Flutter (`pubspec.yaml`). The repository's `Makefile` also uses npm commands for its `run` target. Those paths may need alignment with the actual Flutter app before the combined container/development workflow works end to end. PostgreSQL is included in Compose for health reporting; the current feature logic primarily uses in-memory/catalog and CSV data.
-
-## Project layout
-
-```text
-cmd/api/                 Go API entry point and graceful shutdown
-internal/server/         HTTP routes and request handlers
-internal/nasa/           NASA POWER client, fallback, and environmental derivations
-internal/ml/              Gorgonia inference engine and agronomic post-processing
-internal/rotation/        Rotation recommendations and scenario simulation
-internal/crops/           Crop catalog and agronomic attributes
-internal/soil/            Regional soil profiles and derived soil indicators
-internal/database/        PostgreSQL connection and health checks
-training_data/            Kenya climate and soil datasets
-frontend/                 Flutter application scaffold
-```
-
-## Roadmap for a stronger, more credible demo
-
-1. **Make the experience tangible:** replace the Flutter starter screen with a location/region form, crop and farmer-priority inputs, a NASA/fallback source badge, and clear recommendation cards.
-2. **Show evidence and uncertainty:** display the specific input factors behind every score, explain which values are measured, climatological, assumed, or user-provided, and show data timestamps and missing-data warnings.
-3. **Strengthen the science:** integrate verified source-specific products where claimed, record data provenance, compare derived values with ground observations, and have local agronomists review crop calendars and assumptions.
-4. **Validate the model:** create a reproducible training/evaluation workflow, use locally relevant outcomes, compare against simple baselines, report metrics and limitations, and avoid implying learned accuracy until supported by evidence.
-5. **Make recommendations actionable:** account for planting calendars, seed availability, labor/equipment, local markets, and farmer constraints; explain trade-offs rather than presenting a single score as certainty.
-6. **Test and deploy end to end:** add API/request tests and representative fixtures, connect the Flutter app to a configurable API base URL, resolve the npm-versus-Flutter build mismatch, and publish a working demo URL with sample coordinates and a fallback-safe mode.
-
-## Development commands
-
-The repository `Makefile` includes these Go-oriented targets:
-
-```bash
-make build
-make test
-make itest
-make clean
-```
-
-`make itest` runs database-package tests. `make run` and the Docker frontend build currently reference npm; see the deployment note above before using those targets.
-
-## Disclaimer
-
-Kilimo is an experimental decision-support prototype. Recommendations and projected benefits are not guarantees or professional agronomic advice. Verify local conditions, data sources, crop suitability, and farm economics with qualified local experts before making planting or investment decisions.

@@ -55,6 +55,7 @@ class CLineChartProps {
     this.title,
     this.xAxisLabel,
     this.xAxisLabels = const <String>[],
+    this.xAxisTickIndices,
     this.yAxisLabel,
     this.showLegend = true,
     this.showGridLines = true,
@@ -62,6 +63,7 @@ class CLineChartProps {
     this.showDataPoints = true,
     this.curveSmooth = false,
     this.height = 300,
+    this.removePadding = false,
     this.onPointTap,
   });
 
@@ -86,6 +88,10 @@ class CLineChartProps {
   /// Optional labels for the X axis ticks, in data order.
   final List<String> xAxisLabels;
 
+  /// Optional explicit point indices to show as ticks on the X axis.
+  /// When omitted or empty, ticks are automatically spaced or decimated to prevent squeezing.
+  final List<int>? xAxisTickIndices;
+
   /// Optional label for the vertical Y axis.
   final String? yAxisLabel;
 
@@ -106,6 +112,9 @@ class CLineChartProps {
 
   /// Height of the chart canvas.
   final double height;
+
+  /// Whether to remove chart gutters/padding and render the line graph flush to the edge.
+  final bool removePadding;
 
   /// Callback invoked when a data point marker is tapped.
   final void Function(CLineChartSeries series, CLineChartPoint point)?

@@ -1,30 +1,78 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
-
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-
-import 'package:kilimo/main.dart';
+import 'package:mwandu/feature/authentication/model/user_model.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  group('Authentication UserModel and Payloads', () {
+    test('UserModel serializes and deserializes correctly', () {
+      final json = {
+        'id': 'farmer_12345',
+        'email': 'farmer@kilimo.ke',
+        'name': 'Kiprono Koech',
+        'farm_name': 'Rongai Green Farm',
+        'farm_size_acres': 12.5,
+        'location': {
+          'latitude': -0.3031,
+          'longitude': 36.0800,
+          'county_region': 'Nakuru',
+          'sub_county_village': 'Rongai',
+          'elevation_m': 1850.0,
+        },
+        'soil_attributes': {
+          'main_soil_type': 'Clay Loam',
+          'soil_texture': 'Loamy',
+          'custom_ph': 6.2,
+          'custom_om_pct': 3.5,
+          'drainage_capacity': 'Well-drained',
+        },
+        'current_crop_history': ['maize', 'beans'],
+        'default_priorities': {
+          'soil_organic_matter': 0.8,
+          'water_conservation': 0.8,
+          'nitrogen_fixing': 0.8,
+          'pest_disruption': 0.7,
+          'income_market_value': 0.8,
+          'forage_value': 0.5,
+          'equipment_type': 'Animal Traction',
+        },
+      };
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+      final user = UserModel.fromJson(json);
+      expect(user.id, 'farmer_12345');
+      expect(user.email, 'farmer@kilimo.ke');
+      expect(user.location.countyRegion, 'Nakuru');
+      expect(user.soilAttributes.customPH, 6.2);
+      expect(user.currentCropHistory, ['maize', 'beans']);
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
+      final serialized = user.toJson();
+      expect(serialized['id'], 'farmer_12345');
+      expect(serialized['email'], 'farmer@kilimo.ke');
+      expect(serialized['farm_name'], 'Rongai Green Farm');
+    });
 
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    test('SignUpPayload generates correct payload for backend', () {
+      final payload = SignUpPayload(
+        name: 'Jane Doe',
+        email: 'jane@farm.com',
+        password: 'password123',
+        farmName: 'Jane Valley',
+        farmSizeAcres: 8.0,
+        location: const FarmLocation(
+          latitude: 0.5143,
+          longitude: 35.2698,
+          countyRegion: 'Uasin Gishu',
+        ),
+        soilAttributes: const FarmSoilAttributes(
+          mainSoilType: 'Volcanic Loam',
+          soilTexture: 'Loamy',
+          customPH: 6.5,
+        ),
+      );
+
+      final json = payload.toJson();
+      expect(json['email'], 'jane@farm.com');
+      expect(json['name'], 'Jane Doe');
+      expect(json['location']['county_region'], 'Uasin Gishu');
+      expect(json['soil_attributes']['main_soil_type'], 'Volcanic Loam');
+    });
   });
 }
