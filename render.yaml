@@ -45,7 +45,7 @@ services:
     runtime: static
     plan: free
     rootDir: frontend
-    buildCommand: flutter build web --release
+    buildCommand: git clone https://github.com/flutter/flutter.git --depth 1 -b stable /tmp/flutter && /tmp/flutter/bin/flutter build web --release
     staticPublishPath: build/web
     headers:
       - path: /*
