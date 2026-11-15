@@ -3,7 +3,8 @@ import 'package:mwandu/feature/authentication/model/user_model.dart';
 
 class RemoteAuthRepository {
   final Dio _dio;
-  static const String defaultBaseUrl = 'http://127.0.0.1:8080/api/v1';
+  static const String defaultBaseUrl =
+      'https://kilimo-api-j6ve.onrender.com/api/v1';
 
   RemoteAuthRepository({Dio? dio, String? baseUrl})
     : _dio =

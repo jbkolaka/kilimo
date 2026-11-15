@@ -240,7 +240,8 @@ class NasaService {
   final Dio _dio;
   final String backendBaseUrl;
 
-  static const String defaultBackendBaseUrl = 'http://127.0.0.1:8080/api/v1';
+  static const String defaultBackendBaseUrl =
+      'https://kilimo-api-j6ve.onrender.com/api/v1';
 
   static const List<String> _monthNames = [
     'Jan',

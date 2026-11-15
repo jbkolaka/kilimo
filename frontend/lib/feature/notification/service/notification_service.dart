@@ -9,7 +9,7 @@ class NotificationService {
 
   static const String defaultBackendBaseUrl = String.fromEnvironment(
     'BACKEND_URL',
-    defaultValue: 'http://127.0.0.1:8080/api/v1',
+    defaultValue: 'https://kilimo-api-j6ve.onrender.com/api/v1',
   );
 
   /// SharedPreferences key holding ids of alerts the farmer has already read.
@@ -268,9 +268,7 @@ class NotificationService {
   ) async {
     final readIds = await _loadReadIds();
     final list = items
-        .map(
-          (n) => readIds.contains(n.id) ? n.copyWith(isRead: true) : n,
-        )
+        .map((n) => readIds.contains(n.id) ? n.copyWith(isRead: true) : n)
         .toList();
     _updateCounts(list);
     return list;
