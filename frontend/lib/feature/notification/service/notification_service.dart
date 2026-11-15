@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:mwandu/feature/notification/model/notification_model.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class NotificationService {
   final Dio _dio;
@@ -10,6 +11,10 @@ class NotificationService {
     'BACKEND_URL',
     defaultValue: 'http://127.0.0.1:8080/api/v1',
   );
+
+  /// SharedPreferences key holding ids of alerts the farmer has already read.
+  static const String _readIdsKey = 'notification_read_ids';
+  static const int _maxStoredReadIds = 200;
 
   /// Reactive notifier for unread notification count so bottom nav bar updates live.
   static final ValueNotifier<int> unreadCountNotifier = ValueNotifier<int>(0);
@@ -50,8 +55,7 @@ class NotificationService {
           final list = rawList
               .map((e) => FarmNotification.fromJson(e as Map<String, dynamic>))
               .toList();
-          _updateCounts(list);
-          return list;
+          return await _applyReadState(list);
         }
       } catch (e) {
         debugPrint('Farm notification endpoint fallback: $e');
@@ -70,150 +74,235 @@ class NotificationService {
         final list = rawList
             .map((e) => FarmNotification.fromJson(e as Map<String, dynamic>))
             .toList();
-        _updateCounts(list);
-        return list;
+        return await _applyReadState(list);
       }
     } catch (e) {
       debugPrint('Backend NASA notification endpoint fallback: $e');
     }
 
     // 3. Resilient Fallback: Direct NASA POWER Agroclimatology Space API
-    return await _fetchDirectNasaSpaceAlerts(
+    final direct = await _fetchDirectNasaSpaceAlerts(
       lat: lat,
       lon: lon,
       region: region,
     );
+    return _applyReadState(direct);
   }
 
+  /// Queries the live NASA POWER agroclimatology endpoint for the most recent
+  /// complete observation window and builds alerts purely from the returned
+  /// telemetry. Throws when no real data is available rather than inventing
+  /// placeholder values.
   Future<List<FarmNotification>> _fetchDirectNasaSpaceAlerts({
     required double lat,
     required double lon,
     required String region,
   }) async {
     final now = DateTime.now();
+    // NASA POWER daily products publish with a lag of a few days.
+    final end = now.subtract(const Duration(days: 3));
+    final start = end.subtract(const Duration(days: 6));
+    final startParam = _formatNasaDate(start);
+    final endParam = _formatNasaDate(end);
+
     final url =
         'https://power.larc.nasa.gov/api/temporal/daily/point?'
         'parameters=GWETTOP,T2M,PRECTOTCORR&community=AG&longitude=$lon&latitude=$lat'
-        '&start=20240101&end=20240105&format=JSON';
+        '&start=$startParam&end=$endParam&format=JSON';
 
-    double surfaceWetness = 0.42;
-    double avgTemp = 23.5;
-    double precip = 3.2;
-
+    final Response<dynamic> response;
     try {
-      final response = await _dio.get(url);
-      if (response.statusCode == 200 && response.data is Map<String, dynamic>) {
-        final data = response.data as Map<String, dynamic>;
-        final properties = data['properties'] as Map<String, dynamic>?;
-        final parameter = properties?['parameter'] as Map<String, dynamic>?;
-
-        if (parameter != null) {
-          final gwettop = parameter['GWETTOP'] as Map<String, dynamic>?;
-          if (gwettop != null && gwettop.isNotEmpty) {
-            final val = gwettop.values.first;
-            if (val is num && val > -900) {
-              surfaceWetness = val.toDouble();
-            }
-          }
-
-          final t2m = parameter['T2M'] as Map<String, dynamic>?;
-          if (t2m != null && t2m.isNotEmpty) {
-            final val = t2m.values.first;
-            if (val is num && val > -900) {
-              avgTemp = val.toDouble();
-            }
-          }
-
-          final rain = parameter['PRECTOTCORR'] as Map<String, dynamic>?;
-          if (rain != null && rain.isNotEmpty) {
-            final val = rain.values.first;
-            if (val is num && val > -900) {
-              precip = val.toDouble();
-            }
-          }
-        }
-      }
+      response = await _dio.get(url);
     } catch (e) {
-      debugPrint('Direct NASA POWER query note: $e');
+      throw Exception('Live NASA POWER telemetry unavailable: $e');
     }
 
-    final isMoistureDeficit = surfaceWetness < 0.50;
-    final isHeatStress = avgTemp > 26.0;
+    final data = response.data;
+    Map<String, dynamic>? parameter;
+    if (data is Map) {
+      final properties = data['properties'];
+      if (properties is Map) {
+        final params = properties['parameter'];
+        if (params is Map) {
+          parameter = params.cast<String, dynamic>();
+        }
+      }
+    }
+    if (parameter == null) {
+      throw Exception('Live NASA POWER telemetry returned no observations');
+    }
 
-    final alerts = <FarmNotification>[
-      FarmNotification(
-        id: 'smap-live-${now.millisecondsSinceEpoch}',
-        title: isMoistureDeficit
-            ? 'NASA Satellite Alert: Soil Moisture Deficit'
-            : 'NASA Satellite Update: Adequate Soil Moisture',
-        description: isMoistureDeficit
-            ? 'Surface wetness (GWETTOP) measured at ${surfaceWetness.toStringAsFixed(2)} in $region. Supplemental drip irrigation recommended for row crops.'
-            : 'Surface soil moisture is favorable at ${surfaceWetness.toStringAsFixed(2)} across the $region agricultural sector.',
-        category: 'satellite',
-        severity: isMoistureDeficit
-            ? NotificationSeverity.critical
-            : NotificationSeverity.success,
-        isCritical: isMoistureDeficit,
-        source: 'NASA POWER & SMAP',
-        metricValue: '${surfaceWetness.toStringAsFixed(2)} GWETTOP',
-        recommendation: isMoistureDeficit
-            ? 'Apply supplemental irrigation in early morning or evening to curtail evaporation.'
-            : 'Maintain current field schedule; moisture adequate for active nutrient uptake.',
-        timeAgo: 'Just now',
-        timestamp: now.subtract(const Duration(minutes: 5)),
-      ),
-      FarmNotification(
-        id: 'ecostress-live-${now.millisecondsSinceEpoch}',
-        title: isHeatStress
-            ? 'NASA ECOSTRESS: Canopy Heat Stress Alert'
-            : 'NASA ECOSTRESS: Normal Thermal Envelope',
-        description:
-            'Air temperature at ${avgTemp.toStringAsFixed(1)}°C. Crop transpiration rates are ${isHeatStress ? 'elevated above optimal threshold' : 'within normal seasonal range'}.',
-        category: 'climate',
-        severity: isHeatStress
-            ? NotificationSeverity.warning
-            : NotificationSeverity.info,
-        isCritical: false,
-        source: 'NASA ECOSTRESS',
-        metricValue: '${avgTemp.toStringAsFixed(1)}°C',
-        recommendation: isHeatStress
-            ? 'Consider agroforestry or temporary shading during peak solar noon.'
-            : 'Optimal temperature profile for vegetative photosynthesis.',
-        timeAgo: '28m ago',
-        timestamp: now.subtract(const Duration(minutes: 28)),
-      ),
-      FarmNotification(
-        id: 'soil-fertility-${now.millisecondsSinceEpoch}',
-        title: 'Precision Fertilizer & Soil Chemistry Advisory',
-        description:
-            'Based on regional volcanic loam and forecast precipitation of ${precip.toStringAsFixed(1)} mm/day, schedule split nitrogen top-dressing.',
-        category: 'soil',
-        severity: NotificationSeverity.info,
-        isCritical: false,
-        source: 'Soil Health Engine',
-        metricValue: '${precip.toStringAsFixed(1)} mm/day forecast',
-        recommendation: 'Top-dress CAN prior to expected light showers to facilitate rapid root-zone dissolution.',
-        timeAgo: '2h ago',
-        timestamp: now.subtract(const Duration(hours: 2)),
-      ),
-      FarmNotification(
-        id: 'carbon-sync-${now.millisecondsSinceEpoch}',
-        title: 'Carbon Credit Baseline Sync: Verified Tier A',
-        description:
-            'Soil Organic Matter (SOM) verified at 3.5% across your $region plot. Farm qualified for regenerative carbon incentive payouts.',
-        category: 'carbon',
-        severity: NotificationSeverity.success,
-        isCritical: false,
-        source: 'Carbon Registry',
-        metricValue: '3.5% SOM',
-        recommendation: 'Retain stover and eliminate burning to compound seasonal verified carbon offsets.',
-        timeAgo: '1d ago',
-        timestamp: now.subtract(const Duration(days: 1)),
-      ),
-    ];
+    final surfaceWetness = _meanValid(parameter['GWETTOP']);
+    final avgTemp = _meanValid(parameter['T2M']);
+    final dailyPrecip = _meanValid(parameter['PRECTOTCORR']);
 
-    _updateCounts(alerts);
+    if (surfaceWetness == null && avgTemp == null && dailyPrecip == null) {
+      throw Exception(
+        'Live NASA POWER telemetry contained no usable values for '
+        '$startParam-$endParam',
+      );
+    }
+
+    final alerts = <FarmNotification>[];
+    final windowLabel = '${_shortDate(start)}–${_shortDate(end)}';
+
+    if (surfaceWetness != null) {
+      final isMoistureDeficit = surfaceWetness < 0.50;
+      alerts.add(
+        FarmNotification(
+          id: 'smap-${_dayKey(now)}',
+          title: isMoistureDeficit
+              ? 'NASA Satellite Alert: Soil Moisture Deficit'
+              : 'NASA Satellite Update: Adequate Soil Moisture',
+          description: isMoistureDeficit
+              ? 'Surface wetness (GWETTOP) averaged ${surfaceWetness.toStringAsFixed(2)} in $region over $windowLabel. Supplemental drip irrigation recommended for row crops.'
+              : 'Surface soil moisture is favorable at ${surfaceWetness.toStringAsFixed(2)} across the $region agricultural sector ($windowLabel average).',
+          category: 'satellite',
+          severity: isMoistureDeficit
+              ? NotificationSeverity.critical
+              : NotificationSeverity.success,
+          isCritical: isMoistureDeficit,
+          source: 'NASA POWER & SMAP',
+          metricValue: '${surfaceWetness.toStringAsFixed(2)} GWETTOP',
+          recommendation: isMoistureDeficit
+              ? 'Apply supplemental irrigation in early morning or evening to curtail evaporation.'
+              : 'Maintain current field schedule; moisture adequate for active nutrient uptake.',
+          timestamp: now,
+        ),
+      );
+    }
+
+    if (avgTemp != null) {
+      final isHeatStress = avgTemp > 26.0;
+      alerts.add(
+        FarmNotification(
+          id: 'ecostress-${_dayKey(now)}',
+          title: isHeatStress
+              ? 'NASA ECOSTRESS: Canopy Heat Stress Alert'
+              : 'NASA ECOSTRESS: Normal Thermal Envelope',
+          description:
+              'Mean air temperature at ${avgTemp.toStringAsFixed(1)}°C over $windowLabel. Crop transpiration rates are ${isHeatStress ? 'elevated above optimal threshold' : 'within normal seasonal range'}.',
+          category: 'climate',
+          severity: isHeatStress
+              ? NotificationSeverity.warning
+              : NotificationSeverity.info,
+          isCritical: false,
+          source: 'NASA ECOSTRESS',
+          metricValue: '${avgTemp.toStringAsFixed(1)}°C',
+          recommendation: isHeatStress
+              ? 'Consider agroforestry or temporary shading during peak solar noon.'
+              : 'Optimal temperature profile for vegetative photosynthesis.',
+          timestamp: now,
+        ),
+      );
+    }
+
+    if (dailyPrecip != null) {
+      final isDrySpell = dailyPrecip < 1.0;
+      alerts.add(
+        FarmNotification(
+          id: 'gpm-rain-${_dayKey(now)}',
+          title: isDrySpell
+              ? 'NASA GPM: Below-Average Rainfall Window'
+              : 'NASA GPM: Rainfall Recharge Window',
+          description:
+              'Measured precipitation averaged ${dailyPrecip.toStringAsFixed(1)} mm/day in $region across $windowLabel. ${isDrySpell ? 'Soil water recharge is lagging behind crop demand.' : 'Rainfall is replenishing the root zone.'}',
+          category: 'climate',
+          severity: isDrySpell
+              ? NotificationSeverity.warning
+              : NotificationSeverity.success,
+          isCritical: false,
+          source: 'NASA GPM',
+          metricValue: '${dailyPrecip.toStringAsFixed(1)} mm/day',
+          recommendation: isDrySpell
+              ? 'Prioritise mulching and defer nitrogen top-dressing until soil moisture recovers.'
+              : 'Time split fertilizer applications with the current rainfall to improve nutrient uptake.',
+          timestamp: now,
+        ),
+      );
+    }
+
     return alerts;
+  }
+
+  /// Averages finite daily values, ignoring NASA's -999 fill values.
+  double? _meanValid(dynamic series) {
+    if (series is! Map) {
+      return null;
+    }
+    final values = series.values
+        .whereType<num>()
+        .map((v) => v.toDouble())
+        .where((v) => v > -900)
+        .toList();
+    if (values.isEmpty) {
+      return null;
+    }
+    return values.reduce((a, b) => a + b) / values.length;
+  }
+
+  String _formatNasaDate(DateTime date) {
+    final y = date.year.toString().padLeft(4, '0');
+    final m = date.month.toString().padLeft(2, '0');
+    final d = date.day.toString().padLeft(2, '0');
+    return '$y$m$d';
+  }
+
+  String _shortDate(DateTime date) {
+    final m = date.month.toString().padLeft(2, '0');
+    final d = date.day.toString().padLeft(2, '0');
+    return '$d/$m';
+  }
+
+  String _dayKey(DateTime date) {
+    final y = date.year.toString().padLeft(4, '0');
+    final m = date.month.toString().padLeft(2, '0');
+    final d = date.day.toString().padLeft(2, '0');
+    return '$y-$m-$d';
+  }
+
+  /// Loads persisted read ids and marks matching alerts as read before counts
+  /// are recomputed, so the badge reflects real unread alerts across refreshes.
+  Future<List<FarmNotification>> _applyReadState(
+    List<FarmNotification> items,
+  ) async {
+    final readIds = await _loadReadIds();
+    final list = items
+        .map(
+          (n) => readIds.contains(n.id) ? n.copyWith(isRead: true) : n,
+        )
+        .toList();
+    _updateCounts(list);
+    return list;
+  }
+
+  /// Persists every alert in [items] as read and zeroes the live counters.
+  Future<void> markAllRead(Iterable<FarmNotification> items) async {
+    final ids = items.map((n) => n.id).toSet();
+    final merged = {...await _loadReadIds(), ...ids}.toList()..sort();
+    final trimmed = merged.length > _maxStoredReadIds
+        ? merged.sublist(merged.length - _maxStoredReadIds)
+        : merged;
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList(_readIdsKey, trimmed);
+    } catch (e) {
+      debugPrint('Failed to persist notification read state: $e');
+    }
+
+    unreadCountNotifier.value = 0;
+    criticalCountNotifier.value = 0;
+  }
+
+  Future<Set<String>> _loadReadIds() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return (prefs.getStringList(_readIdsKey) ?? const <String>[]).toSet();
+    } catch (e) {
+      debugPrint('Failed to load notification read state: $e');
+      return <String>{};
+    }
   }
 
   void _updateCounts(List<FarmNotification> items) {

@@ -16,6 +16,9 @@ import (
 // GenerateLiveNotifications synthesizes real-time NASA Earth Observation satellite alerts and soil advisories.
 func (s *Server) GenerateLiveNotifications(obs *nasa.EarthObservationData, soilProfile soil.Profile, farmer *models.FarmerProfile) []models.FarmNotification {
 	now := time.Now()
+	// IDs are stable for the calendar day so clients can persist read state
+	// across refreshes instead of seeing every poll as a brand new alert.
+	day := now.Format("2006-01-02")
 	notifications := make([]models.FarmNotification, 0, 6)
 
 	region := soilProfile.Region
@@ -46,7 +49,7 @@ func (s *Server) GenerateLiveNotifications(obs *nasa.EarthObservationData, soilP
 	smapMoisture := obs.SMAP.SurfaceSoilMoistureM3M3
 	if smapMoisture < 0.22 || obs.SMAP.DroughtStressIndex == "Severe" || obs.SMAP.DroughtStressIndex == "Moderate" {
 		notifications = append(notifications, models.FarmNotification{
-			ID:             fmt.Sprintf("smap-moisture-%d", now.Unix()),
+			ID:             fmt.Sprintf("smap-moisture-%s", day),
 			Title:          "NASA Satellite Alert: Soil Moisture Deficit",
 			Description:    fmt.Sprintf("Surface wetness (SMAP) dropped to %.2f m³/m³ in %s (%s drought stress). Root zone moisture is depleting under current evapotranspiration.", smapMoisture, region, obs.SMAP.DroughtStressIndex),
 			Category:       "satellite",
@@ -60,7 +63,7 @@ func (s *Server) GenerateLiveNotifications(obs *nasa.EarthObservationData, soilP
 		})
 	} else {
 		notifications = append(notifications, models.FarmNotification{
-			ID:             fmt.Sprintf("smap-optimal-%d", now.Unix()),
+			ID:             fmt.Sprintf("smap-optimal-%s", day),
 			Title:          "NASA SMAP: Healthy Soil Moisture Window",
 			Description:    fmt.Sprintf("Surface moisture is stable at %.2f m³/m³ across %s with %s infiltration potential.", smapMoisture, region, obs.SMAP.InfiltrationPotential),
 			Category:       "satellite",
@@ -79,7 +82,7 @@ func (s *Server) GenerateLiveNotifications(obs *nasa.EarthObservationData, soilP
 	lst := obs.ECOSTRESS.LandSurfaceTempC
 	if esi < 0.45 || obs.ECOSTRESS.HeatStressCategory == "High" || obs.ECOSTRESS.HeatStressCategory == "Severe" {
 		notifications = append(notifications, models.FarmNotification{
-			ID:             fmt.Sprintf("ecostress-thermal-%d", now.Unix()),
+			ID:             fmt.Sprintf("ecostress-thermal-%s", day),
 			Title:          "NASA ECOSTRESS: Canopy Heat Stress Detected",
 			Description:    fmt.Sprintf("Land surface temperature reached %.1f°C with Evaporative Stress Index of %.2f (%s category). Plants are transpiring faster than soil water replenishment.", lst, esi, obs.ECOSTRESS.HeatStressCategory),
 			Category:       "climate",
@@ -97,7 +100,7 @@ func (s *Server) GenerateLiveNotifications(obs *nasa.EarthObservationData, soilP
 	slope := obs.SRTM.SlopePercentage
 	if obs.SRTM.RunoffHazard == "High" || obs.SRTM.RunoffHazard == "Severe" || slope > 4.5 {
 		notifications = append(notifications, models.FarmNotification{
-			ID:             fmt.Sprintf("gpm-runoff-%d", now.Unix()),
+			ID:             fmt.Sprintf("gpm-runoff-%s", day),
 			Title:          "NASA SRTM & GPM: Erosion & Runoff Hazard",
 			Description:    fmt.Sprintf("Terrain slope is %.1f%% with %s runoff hazard and %d extreme precipitation event(s)/year. Unprotected topsoil is vulnerable to sheet erosion.", slope, obs.SRTM.RunoffHazard, obs.GPM.ExtremeRainEventsPerYr),
 			Category:       "climate",
@@ -114,7 +117,7 @@ func (s *Server) GenerateLiveNotifications(obs *nasa.EarthObservationData, soilP
 	// 4. NASA MODIS: Bare Soil Fallow Alert
 	if len(obs.MODIS.BareSoilMonths) > 0 {
 		notifications = append(notifications, models.FarmNotification{
-			ID:             fmt.Sprintf("modis-bare-soil-%d", now.Unix()),
+			ID:             fmt.Sprintf("modis-bare-soil-%s", day),
 			Title:          "NASA MODIS: Bare Soil Vulnerability Window",
 			Description:    fmt.Sprintf("Satellite spectral indices detect %d fallow month(s) (%s) with mean NDVI of %.2f. Bare ground accelerates organic matter oxidation.", len(obs.MODIS.BareSoilMonths), strings.Join(obs.MODIS.BareSoilMonths, ", "), obs.MODIS.MeanNDVI),
 			Category:       "satellite",
@@ -131,7 +134,7 @@ func (s *Server) GenerateLiveNotifications(obs *nasa.EarthObservationData, soilP
 	// 5. Precision Soil Chemistry & Agronomic Advisory
 	if ph < 5.8 {
 		notifications = append(notifications, models.FarmNotification{
-			ID:             fmt.Sprintf("soil-acidity-%d", now.Unix()),
+			ID:             fmt.Sprintf("soil-acidity-%s", day),
 			Title:          "Precision Soil Advisory: Acidity & Phosphorus Fixation",
 			Description:    fmt.Sprintf("Soil pH is %.1f in %s (%s). Acidic conditions precipitate aluminum and lock phosphorus, impeding seedling vigor.", ph, region, soilProfile.MainSoilType),
 			Category:       "soil",
@@ -145,7 +148,7 @@ func (s *Server) GenerateLiveNotifications(obs *nasa.EarthObservationData, soilP
 		})
 	} else {
 		notifications = append(notifications, models.FarmNotification{
-			ID:             fmt.Sprintf("soil-advisory-%d", now.Unix()),
+			ID:             fmt.Sprintf("soil-advisory-%s", day),
 			Title:          "Precision Soil Health & Fertilizer Advisory",
 			Description:    fmt.Sprintf("Soil pH %.1f with %s texture and %.1f%% organic matter. High nutrient bioavailability window.", ph, texture, om),
 			Category:       "soil",
@@ -162,7 +165,7 @@ func (s *Server) GenerateLiveNotifications(obs *nasa.EarthObservationData, soilP
 	// 6. Carbon Credit Baseline Sync
 	if om >= 2.8 {
 		notifications = append(notifications, models.FarmNotification{
-			ID:             fmt.Sprintf("carbon-sync-%d", now.Unix()),
+			ID:             fmt.Sprintf("carbon-sync-%s", day),
 			Title:          "Carbon Credit Baseline Sync: Qualified Tier A",
 			Description:    fmt.Sprintf("Soil organic matter level at %.1f%% qualifies your %s acreage for verified soil carbon sequestration rewards under regenerative practice tiers.", om, region),
 			Category:       "carbon",

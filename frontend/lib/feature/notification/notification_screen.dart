@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:mwandu/core/theme/variables.dart';
@@ -13,23 +15,39 @@ class NotificationScreen extends StatefulWidget {
 }
 
 class _NotificationScreenState extends State<NotificationScreen> {
+  static const Duration _refreshInterval = Duration(seconds: 60);
+
   final NotificationService _service = NotificationService();
   List<FarmNotification> _notifications = [];
   bool _isLoading = true;
   String? _errorMessage;
+  Timer? _refreshTimer;
   String _selectedFilter = 'All'; // 'All', 'Critical', 'Satellite', 'Soil'
 
   @override
   void initState() {
     super.initState();
     _fetchLiveAlerts();
+    // Keep the feed and unread badge live while the app is open.
+    _refreshTimer = Timer.periodic(
+      _refreshInterval,
+      (_) => _fetchLiveAlerts(silent: true),
+    );
   }
 
-  Future<void> _fetchLiveAlerts() async {
-    setState(() {
-      _isLoading = true;
-      _errorMessage = null;
-    });
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _fetchLiveAlerts({bool silent = false}) async {
+    if (!silent) {
+      setState(() {
+        _isLoading = true;
+        _errorMessage = null;
+      });
+    }
 
     double lat = -0.3031;
     double lon = 36.0800;
@@ -55,26 +73,33 @@ class _NotificationScreenState extends State<NotificationScreen> {
         setState(() {
           _notifications = items;
           _isLoading = false;
+          _errorMessage = null;
         });
       }
     } catch (e) {
       if (mounted) {
         setState(() {
           _isLoading = false;
-          _errorMessage = 'Could not sync live satellite alerts. Tap to retry.';
+          // A silent background refresh keeps the last good feed on screen.
+          if (_notifications.isEmpty) {
+            _errorMessage =
+                'Could not sync live satellite alerts. Tap to retry.';
+          }
         });
       }
     }
   }
 
-  void _markAllAsRead() {
+  Future<void> _markAllAsRead() async {
+    await _service.markAllRead(_notifications);
+    if (!mounted) {
+      return;
+    }
     setState(() {
       _notifications = _notifications
           .map((n) => n.copyWith(isRead: true))
           .toList();
     });
-    NotificationService.unreadCountNotifier.value = 0;
-    NotificationService.criticalCountNotifier.value = 0;
   }
 
   List<FarmNotification> get _filteredNotifications {
@@ -151,12 +176,14 @@ class _NotificationScreenState extends State<NotificationScreen> {
           IconButton(
             icon: Icon(Icons.refresh, color: tokens.textSecondary, size: 20),
             tooltip: 'Refresh live satellite telemetry',
-            onPressed: _fetchLiveAlerts,
+            onPressed: () => _fetchLiveAlerts(),
           ),
           IconButton(
             icon: Icon(Icons.done_all, color: tokens.textSecondary, size: 20),
             tooltip: 'Mark all as read',
-            onPressed: _notifications.isEmpty ? null : _markAllAsRead,
+            onPressed: _notifications.isEmpty
+                ? null
+                : () => _markAllAsRead(),
           ),
         ],
       ),
@@ -191,7 +218,7 @@ class _NotificationScreenState extends State<NotificationScreen> {
                 ? _buildEmptyView(tokens)
                 : RefreshIndicator(
                     color: tokens.interactive,
-                    onRefresh: _fetchLiveAlerts,
+                    onRefresh: () => _fetchLiveAlerts(),
                     child: ListView.separated(
                       padding: const EdgeInsets.all(Spacing.v16px1remSpacing05),
                       itemCount: _filteredNotifications.length,
@@ -507,7 +534,7 @@ class _NotificationScreenState extends State<NotificationScreen> {
             ),
             const SizedBox(height: 12),
             ElevatedButton.icon(
-              onPressed: _fetchLiveAlerts,
+              onPressed: () => _fetchLiveAlerts(),
               icon: const Icon(Icons.refresh, size: 16),
               label: const Text('Retry Telemetry Sync'),
               style: ElevatedButton.styleFrom(

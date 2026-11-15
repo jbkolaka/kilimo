@@ -31,7 +31,6 @@ class FarmNotification {
   final String source;
   final String? metricValue;
   final String? recommendation;
-  final String timeAgo;
   final DateTime timestamp;
   final bool isRead;
 
@@ -45,14 +44,15 @@ class FarmNotification {
     required this.source,
     this.metricValue,
     this.recommendation,
-    required this.timeAgo,
     required this.timestamp,
     this.isRead = false,
   });
 
   factory FarmNotification.fromJson(Map<String, dynamic> json) {
     return FarmNotification(
-      id: json['id'] as String? ?? UniqueKey().toString(),
+      // Deterministic fallback keeps read state stable when the server omits an id.
+      id: json['id'] as String? ??
+          '${json['title'] ?? 'alert'}-${json['timestamp'] ?? ''}',
       title: json['title'] as String? ?? 'NASA Satellite Advisory',
       description: json['description'] as String? ?? '',
       category: json['category'] as String? ?? 'satellite',
@@ -63,7 +63,6 @@ class FarmNotification {
       source: json['source'] as String? ?? 'NASA Earth Observations',
       metricValue: json['metric_value'] as String?,
       recommendation: json['recommendation'] as String?,
-      timeAgo: json['time_ago'] as String? ?? 'Just now',
       timestamp: json['timestamp'] != null
           ? DateTime.tryParse(json['timestamp'].toString()) ?? DateTime.now()
           : DateTime.now(),
@@ -81,7 +80,6 @@ class FarmNotification {
     String? source,
     String? metricValue,
     String? recommendation,
-    String? timeAgo,
     DateTime? timestamp,
     bool? isRead,
   }) {
@@ -95,10 +93,28 @@ class FarmNotification {
       source: source ?? this.source,
       metricValue: metricValue ?? this.metricValue,
       recommendation: recommendation ?? this.recommendation,
-      timeAgo: timeAgo ?? this.timeAgo,
       timestamp: timestamp ?? this.timestamp,
       isRead: isRead ?? this.isRead,
     );
+  }
+
+  /// Human readable age of the alert, derived from [timestamp] so it stays
+  /// accurate as the app runs and refreshes instead of frozen server text.
+  String get timeAgo {
+    final diff = DateTime.now().difference(timestamp);
+    if (diff.inMinutes < 1) {
+      return 'Just now';
+    }
+    if (diff.inMinutes < 60) {
+      return '${diff.inMinutes}m ago';
+    }
+    if (diff.inHours < 24) {
+      return '${diff.inHours}h ago';
+    }
+    if (diff.inDays == 1) {
+      return 'Yesterday';
+    }
+    return '${diff.inDays}d ago';
   }
 
   IconData get icon {
