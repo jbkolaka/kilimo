@@ -235,18 +235,18 @@ func (s *Server) FetchNASANotificationsHandler(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		// Provide reasonable default coordinates (Rongai/Nakuru agricultural belt)
-		req.Latitude = -0.3031
-		req.Longitude = 36.0800
-		req.Region = "Nakuru"
+		c.JSON(http.StatusBadRequest, gin.H{"error": "valid farm coordinates are required"})
+		return
 	}
 
 	if req.Latitude == 0 && req.Longitude == 0 {
-		req.Latitude = -0.3031
-		req.Longitude = 36.0800
+		c.JSON(http.StatusBadRequest, gin.H{"error": "valid farm coordinates are required"})
+		return
 	}
-	if req.Region == "" {
-		req.Region = "Nakuru"
+
+	hasRegionalProfile := strings.TrimSpace(req.Region) != ""
+	if !hasRegionalProfile {
+		req.Region = "your farm"
 	}
 
 	obs, err := s.nasa.FetchObservations(c.Request.Context(), req.Latitude, req.Longitude)
@@ -264,6 +264,15 @@ func (s *Server) FetchNASANotificationsHandler(c *gin.Context) {
 	}
 
 	notifications := s.GenerateLiveNotifications(obs, soilProfile, nil)
+	if !hasRegionalProfile {
+		locationNotifications := notifications[:0]
+		for _, notification := range notifications {
+			if notification.Category != "soil" && notification.Category != "carbon" {
+				locationNotifications = append(locationNotifications, notification)
+			}
+		}
+		notifications = locationNotifications
+	}
 
 	criticalCount := 0
 	for _, n := range notifications {

@@ -7,10 +7,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"kilimo/internal/models"
 
 	"kilimo/internal/auth"
 	"kilimo/internal/ml"
+	"kilimo/internal/models"
 	"kilimo/internal/nasa"
 	"kilimo/internal/rotation"
 	"kilimo/internal/soil"
@@ -339,10 +339,11 @@ func TestNASANotificationsEndpoint(t *testing.T) {
 	s := setupTestServer()
 	handler := s.RegisterRoutes()
 
+	const latitude = 0.0917
+	const longitude = 34.7680
 	payload := map[string]interface{}{
-		"latitude":  -0.3031,
-		"longitude": 36.0800,
-		"region":    "Nakuru",
+		"latitude":  latitude,
+		"longitude": longitude,
 	}
 	body, _ := json.Marshal(payload)
 	req, _ := http.NewRequest("POST", "/api/v1/nasa/notifications", bytes.NewBuffer(body))
@@ -357,6 +358,8 @@ func TestNASANotificationsEndpoint(t *testing.T) {
 	var resp struct {
 		Count         int                       `json:"count"`
 		CriticalCount int                       `json:"critical_count"`
+		Coordinates   models.FarmLocation       `json:"coordinates"`
+		Region        string                    `json:"region"`
 		Notifications []models.FarmNotification `json:"notifications"`
 	}
 	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
@@ -366,9 +369,18 @@ func TestNASANotificationsEndpoint(t *testing.T) {
 	if resp.Count == 0 {
 		t.Fatalf("expected notifications to be generated, got 0")
 	}
+	if resp.Coordinates.Latitude != latitude || resp.Coordinates.Longitude != longitude {
+		t.Fatalf("expected response coordinates %f,%f, got %f,%f", latitude, longitude, resp.Coordinates.Latitude, resp.Coordinates.Longitude)
+	}
+	if resp.Region == "Nakuru" {
+		t.Fatalf("expected coordinate-only request not to use the Nakuru profile")
+	}
 
 	hasSatelliteAlert := false
 	for _, n := range resp.Notifications {
+		if n.Category == "soil" || n.Category == "carbon" {
+			t.Fatalf("coordinate-only request returned county-based %s notification", n.Category)
+		}
 		if strings.Contains(n.Source, "NASA") {
 			hasSatelliteAlert = true
 			break
@@ -376,5 +388,23 @@ func TestNASANotificationsEndpoint(t *testing.T) {
 	}
 	if !hasSatelliteAlert {
 		t.Fatalf("expected at least one NASA satellite notification")
+	}
+}
+
+func TestNASANotificationsRequireFarmCoordinates(t *testing.T) {
+	s := setupTestServer()
+	handler := s.RegisterRoutes()
+
+	req, _ := http.NewRequest(
+		"POST",
+		"/api/v1/nasa/notifications",
+		strings.NewReader(`{"latitude":0,"longitude":0}`),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 when farm coordinates are missing, got %d", rr.Code)
 	}
 }

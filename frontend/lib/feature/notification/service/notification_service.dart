@@ -33,40 +33,17 @@ class NotificationService {
 
   /// Fetches live alerts from the Go backend, falling back directly to live NASA POWER Space API.
   Future<List<FarmNotification>> fetchLiveNotifications({
-    double latitude = -0.3031,
-    double longitude = 36.0800,
-    String region = 'Nakuru',
-    String? authToken,
+    required double latitude,
+    required double longitude,
   }) async {
     final lat = double.parse(latitude.toStringAsFixed(4));
     final lon = double.parse(longitude.toStringAsFixed(4));
 
-    // 1. Try Authenticated / Farm endpoint if token is present
-    if (authToken != null && authToken.isNotEmpty) {
-      try {
-        final response = await _dio.get(
-          '$backendBaseUrl/farm/notifications',
-          options: Options(headers: {'Authorization': 'Bearer $authToken'}),
-        );
-        if (response.statusCode == 200 &&
-            response.data is Map<String, dynamic>) {
-          final data = response.data as Map<String, dynamic>;
-          final rawList = data['notifications'] as List<dynamic>? ?? [];
-          final list = rawList
-              .map((e) => FarmNotification.fromJson(e as Map<String, dynamic>))
-              .toList();
-          return await _applyReadState(list);
-        }
-      } catch (e) {
-        debugPrint('Farm notification endpoint fallback: $e');
-      }
-    }
-
-    // 2. Try Public Coordinate-based backend NASA notifications endpoint
+    // Request alerts using only the farm coordinates, not the saved county.
     try {
       final response = await _dio.post(
         '$backendBaseUrl/nasa/notifications',
-        data: {'latitude': lat, 'longitude': lon, 'region': region},
+        data: {'latitude': lat, 'longitude': lon},
       );
       if (response.statusCode == 200 && response.data is Map<String, dynamic>) {
         final data = response.data as Map<String, dynamic>;
@@ -80,11 +57,11 @@ class NotificationService {
       debugPrint('Backend NASA notification endpoint fallback: $e');
     }
 
-    // 3. Resilient Fallback: Direct NASA POWER Agroclimatology Space API
+    // Resilient fallback: query NASA POWER directly at the farm coordinates.
     final direct = await _fetchDirectNasaSpaceAlerts(
       lat: lat,
       lon: lon,
-      region: region,
+      region: 'your farm',
     );
     return _applyReadState(direct);
   }

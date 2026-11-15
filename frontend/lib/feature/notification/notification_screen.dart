@@ -49,25 +49,32 @@ class _NotificationScreenState extends State<NotificationScreen> {
       });
     }
 
-    double lat = -0.3031;
-    double lon = 36.0800;
-    String region = 'Nakuru';
-    String? token;
-
     final authState = context.read<AuthBloc>().state;
-    if (authState is Authenticated) {
-      lat = authState.user.location.latitude;
-      lon = authState.user.location.longitude;
-      region = authState.user.location.countyRegion;
-      token = authState.token;
+    if (authState is! Authenticated) {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _errorMessage = 'Sign in to load alerts for your farm location.';
+        });
+      }
+      return;
+    }
+
+    final location = authState.user.location;
+    if (location.latitude == 0 && location.longitude == 0) {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _errorMessage = 'Set your farm location to load local alerts.';
+        });
+      }
+      return;
     }
 
     try {
       final items = await _service.fetchLiveNotifications(
-        latitude: lat,
-        longitude: lon,
-        region: region,
-        authToken: token,
+        latitude: location.latitude,
+        longitude: location.longitude,
       );
       if (mounted) {
         setState(() {
