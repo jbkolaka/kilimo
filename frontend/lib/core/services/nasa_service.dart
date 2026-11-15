@@ -236,6 +236,93 @@ class NasaSoilProfile {
   }
 }
 
+/// Live weather block returned alongside NASA alerts for the dashboard card.
+class FarmWeather {
+  final double meanTempC;
+  final double maxTempC;
+  final double minTempC;
+  final double? soilMoistureM3M3;
+  final double? precipitationMMDay;
+  final String window;
+  final String source;
+
+  const FarmWeather({
+    required this.meanTempC,
+    required this.maxTempC,
+    required this.minTempC,
+    this.soilMoistureM3M3,
+    this.precipitationMMDay,
+    required this.window,
+    required this.source,
+  });
+
+  factory FarmWeather.fromJson(Map<String, dynamic> json) {
+    return FarmWeather(
+      meanTempC: (json['mean_temp_c'] as num?)?.toDouble() ?? 0,
+      maxTempC: (json['max_temp_c'] as num?)?.toDouble() ?? 0,
+      minTempC: (json['min_temp_c'] as num?)?.toDouble() ?? 0,
+      soilMoistureM3M3: (json['soil_moisture_m3_m3'] as num?)?.toDouble(),
+      precipitationMMDay: (json['precipitation_mm_day'] as num?)?.toDouble(),
+      window: json['window'] as String? ?? '',
+      source: json['source'] as String? ?? 'NASA POWER',
+    );
+  }
+}
+
+/// One crop's temperature tolerance result: `ok`, `heat_stress` or
+/// `cold_stress`, with how far it exceeds its limit when stressed.
+class CropTemperatureRisk {
+  final String name;
+  final String status;
+  final double? limitC;
+  final double? exceedanceC;
+
+  const CropTemperatureRisk({
+    required this.name,
+    required this.status,
+    this.limitC,
+    this.exceedanceC,
+  });
+
+  bool get isOk => status == 'ok';
+
+  factory CropTemperatureRisk.fromJson(Map<String, dynamic> json) {
+    return CropTemperatureRisk(
+      name: json['name'] as String? ?? 'Crop',
+      status: json['status'] as String? ?? 'ok',
+      limitC: (json['limit_c'] as num?)?.toDouble(),
+      exceedanceC: (json['exceedance_c'] as num?)?.toDouble(),
+    );
+  }
+}
+
+class FarmWeatherSummary {
+  final FarmWeather weather;
+  final List<CropTemperatureRisk> crops;
+  final String dataSource;
+  final String region;
+
+  const FarmWeatherSummary({
+    required this.weather,
+    required this.crops,
+    required this.dataSource,
+    required this.region,
+  });
+
+  factory FarmWeatherSummary.fromJson(Map<String, dynamic> json) {
+    final rawCrops = json['crop_risk'] as List<dynamic>? ?? const [];
+    return FarmWeatherSummary(
+      weather: FarmWeather.fromJson(json['weather'] as Map<String, dynamic>),
+      crops: rawCrops
+          .whereType<Map<String, dynamic>>()
+          .map(CropTemperatureRisk.fromJson)
+          .toList(),
+      dataSource: json['data_source'] as String? ?? 'NASA POWER',
+      region: json['region'] as String? ?? '',
+    );
+  }
+}
+
 class NasaService {
   final Dio _dio;
   final String backendBaseUrl;
@@ -268,6 +355,43 @@ class NasaService {
             ),
           ),
       backendBaseUrl = backendBaseUrl ?? defaultBackendBaseUrl;
+
+  /// Fetches the compact live weather + crop temperature risk summary used by
+  /// the dashboard card. Returns null when the backend has no live weather
+  /// block, so the card can show an explicit unavailable state instead of
+  /// inventing values.
+  Future<FarmWeatherSummary?> fetchFarmWeatherSummary({
+    required double latitude,
+    required double longitude,
+    List<String> crops = const [],
+    String farmName = '',
+  }) async {
+    final lat = double.parse(latitude.toStringAsFixed(4));
+    final lon = double.parse(longitude.toStringAsFixed(4));
+
+    try {
+      final response = await _dio.post(
+        '$backendBaseUrl/nasa/notifications',
+        data: {
+          'latitude': lat,
+          'longitude': lon,
+          if (crops.isNotEmpty) 'crops': crops,
+          if (farmName.trim().isNotEmpty) 'farm_name': farmName.trim(),
+        },
+        // The endpoint performs two NASA lookups, so allow more time than the
+        // default 4s client timeout before declaring the card unavailable.
+        options: Options(receiveTimeout: const Duration(seconds: 20)),
+      );
+      if (response.statusCode == 200 && response.data is Map<String, dynamic>) {
+        final data = response.data as Map<String, dynamic>;
+        if (data['weather'] is Map<String, dynamic>) {
+          return FarmWeatherSummary.fromJson(data);
+        }
+      }
+    } catch (_) {}
+
+    return null;
+  }
 
   Future<NasaSoilProfile> fetchSoilProfile({
     required double latitude,

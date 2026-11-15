@@ -7,6 +7,7 @@ import 'package:mwandu/feature/authentication/bloc/auth_bloc.dart';
 import 'package:mwandu/feature/authentication/model/user_model.dart';
 import 'package:mwandu/feature/notification/notification_screen.dart';
 import 'package:mwandu/feature/setting/setting_screen.dart';
+import 'package:mwandu/feature/home/widgets/live_farm_summary_card.dart';
 import 'package:mwandu/feature/home/widgets/nasa_climate_chart_card.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -193,33 +194,20 @@ class _HomeScreenState extends State<HomeScreen> {
                                       fontSize: 14,
                                     ),
                                   ),
-                                  const SizedBox(
-                                    height: Spacing.v4px025remSpacing02,
-                                  ),
-                                  Row(
-                                    children: [
-                                      Icon(
-                                        Icons.place_outlined,
-                                        size: 16,
-                                        color: tokens.interactive,
-                                      ),
-                                      const SizedBox(
-                                        width: Spacing.v4px025remSpacing02,
-                                      ),
-                                      Text(
-                                        '${user.location.countyRegion} • ${user.farmSizeAcres.toStringAsFixed(1)} Acres',
-                                        style: TextStyle(
-                                          color: tokens.textSecondary,
-                                          fontSize: 13,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
                                 ],
                               ),
                             ),
                           ],
                         ),
+                      ),
+                      const SizedBox(height: Spacing.v24px15remSpacing06),
+
+                      // Live NASA weather + crop temperature risk summary
+                      LiveFarmSummaryCard(
+                        latitude: user.location.latitude,
+                        longitude: user.location.longitude,
+                        crops: user.currentCropHistory,
+                        farmName: user.farmName,
                       ),
                       const SizedBox(height: Spacing.v24px15remSpacing06),
 

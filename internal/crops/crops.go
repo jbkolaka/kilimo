@@ -1,5 +1,7 @@
 package crops
 
+import "strings"
+
 // Category represents the agronomic functional group of a crop.
 type Category string
 
@@ -394,4 +396,47 @@ func GetAllCrops() []CropProfile {
 func GetCrop(id string) (CropProfile, bool) {
 	c, ok := Catalog[id]
 	return c, ok
+}
+
+// GetCropByName resolves a free-text crop name typed by a farmer (for example
+// "maize", "Maize (Corn)", "beans" or "Kunde") to a catalog profile.
+func GetCropByName(name string) (CropProfile, bool) {
+	cleaned := strings.TrimSpace(strings.ToLower(name))
+	if cleaned == "" {
+		return CropProfile{}, false
+	}
+	if i := strings.Index(cleaned, "("); i > 0 {
+		cleaned = strings.TrimSpace(cleaned[:i])
+	}
+
+	key := strings.ReplaceAll(cleaned, " ", "_")
+	if c, ok := Catalog[key]; ok {
+		return c, true
+	}
+
+	aliases := map[string]string{
+		"bean":   "common_bean",
+		"beans":  "common_bean",
+		"corn":   "maize",
+		"kunde":  "cowpea",
+		"mbaazi": "pigeon_pea",
+		"mtama":  "sorghum",
+		"mawele": "pearl_millet",
+		"mucuna": "velvet_bean",
+	}
+	if id, ok := aliases[key]; ok {
+		return Catalog[id], true
+	}
+
+	for _, c := range Catalog {
+		common := strings.ToLower(c.CommonName)
+		if i := strings.Index(common, "("); i > 0 {
+			common = strings.TrimSpace(common[:i])
+		}
+		if common == cleaned || strings.HasPrefix(common, cleaned) {
+			return c, true
+		}
+	}
+
+	return CropProfile{}, false
 }

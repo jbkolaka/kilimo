@@ -60,7 +60,8 @@ class _NotificationScreenState extends State<NotificationScreen> {
       return;
     }
 
-    final location = authState.user.location;
+    final user = authState.user;
+    final location = user.location;
     if (location.latitude == 0 && location.longitude == 0) {
       if (mounted) {
         setState(() {
@@ -75,6 +76,8 @@ class _NotificationScreenState extends State<NotificationScreen> {
       final items = await _service.fetchLiveNotifications(
         latitude: location.latitude,
         longitude: location.longitude,
+        crops: user.currentCropHistory,
+        farmName: user.farmName,
       );
       if (mounted) {
         setState(() {

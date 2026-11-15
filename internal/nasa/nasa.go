@@ -118,12 +118,35 @@ type MonthlyEnvironmental struct {
 	StressFactors        string  `json:"stress_factors,omitempty"`
 }
 
+// DailyObservation aggregates the most recent real NASA POWER daily
+// observations for a coordinate. Unlike the monthly climatology, every value
+// here comes from an actual satellite/reanalysis day rather than a norm.
+type DailyObservation struct {
+	Latitude             float64   `json:"latitude"`
+	Longitude            float64   `json:"longitude"`
+	StartDate            string    `json:"start_date"`
+	EndDate              string    `json:"end_date"`
+	Days                 int       `json:"days"`
+	MeanTempC            float64   `json:"mean_temp_c"`
+	MaxTempC             float64   `json:"max_temp_c"`
+	MinTempC             float64   `json:"min_temp_c"`
+	SurfaceSoilMoisture  float64   `json:"surface_soil_moisture_m3_m3"`
+	DailyPrecipitationMM float64   `json:"daily_precipitation_mm"`
+	HasSoilMoisture      bool      `json:"has_soil_moisture"`
+	HasPrecipitation     bool      `json:"has_precipitation"`
+	Source               string    `json:"source"`
+	Timestamp            time.Time `json:"timestamp"`
+}
+
 type Service struct {
 	httpClient       *http.Client
 	climateHistory   []ClimateHistoryRow
 	climateMu        sync.RWMutex
 	nasaPowerCache   map[string]*NASAPowerClimatology
 	nasaPowerCacheMu sync.RWMutex
+	dailyCache       map[string]*DailyObservation
+	dailyCacheAt     map[string]time.Time
+	dailyCacheMu     sync.RWMutex
 	cacheExpiryHours int
 }
 
@@ -141,6 +164,8 @@ func NewService(climateCsvPath string) *Service {
 			Timeout: 10 * time.Second,
 		},
 		nasaPowerCache:   make(map[string]*NASAPowerClimatology),
+		dailyCache:       make(map[string]*DailyObservation),
+		dailyCacheAt:     make(map[string]time.Time),
 		cacheExpiryHours: 24,
 	}
 
@@ -506,6 +531,138 @@ func (s *Service) fetchNASAPower(ctx context.Context, lat, lon float64) (*NASAPo
 	s.nasaPowerCacheMu.Unlock()
 
 	return power, nil
+}
+
+// FetchRecentDaily returns the most recent real daily NASA POWER observations
+// (air temperature, surface soil wetness and precipitation) for a coordinate.
+// NASA POWER daily products publish with a short lag, so the window ends a few
+// days before today. Results are cached briefly to stay friendly to the API.
+func (s *Service) FetchRecentDaily(ctx context.Context, lat, lon float64) (*DailyObservation, error) {
+	cacheKey := fmt.Sprintf("%.2f,%.2f", lat, lon)
+	s.dailyCacheMu.RLock()
+	cached, ok := s.dailyCache[cacheKey]
+	cachedAt := s.dailyCacheAt[cacheKey]
+	s.dailyCacheMu.RUnlock()
+	if ok && time.Since(cachedAt) < 3*time.Hour {
+		return cached, nil
+	}
+
+	end := time.Now().UTC().AddDate(0, 0, -3)
+	start := end.AddDate(0, 0, -7)
+	apiURL := fmt.Sprintf(
+		"https://power.larc.nasa.gov/api/temporal/daily/point?parameters=T2M,T2M_MAX,T2M_MIN,GWETTOP,PRECTOTCORR&community=AG&longitude=%.4f&latitude=%.4f&start=%s&end=%s&format=JSON",
+		lon, lat, start.Format("20060102"), end.Format("20060102"),
+	)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("nasa power daily api returned status %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	var raw struct {
+		Properties struct {
+			Parameter struct {
+				T2M     map[string]float64 `json:"T2M"`
+				T2M_MAX map[string]float64 `json:"T2M_MAX"`
+				T2M_MIN map[string]float64 `json:"T2M_MIN"`
+				GWETTOP map[string]float64 `json:"GWETTOP"`
+				PRECTOT map[string]float64 `json:"PRECTOTCORR"`
+			} `json:"parameter"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, err
+	}
+
+	param := raw.Properties.Parameter
+	meanTemp, meanDays := meanValidValues(param.T2M)
+	maxTemp, maxDays := extremeValidValue(param.T2M_MAX, true)
+	minTemp, minDays := extremeValidValue(param.T2M_MIN, false)
+	if meanDays == 0 && maxDays == 0 && minDays == 0 {
+		return nil, fmt.Errorf("nasa power daily api returned no usable temperature values")
+	}
+
+	observation := &DailyObservation{
+		Latitude:  lat,
+		Longitude: lon,
+		StartDate: start.Format("02 Jan"),
+		EndDate:   end.Format("02 Jan"),
+		Days:      meanDays,
+		MeanTempC: roundTo(meanTemp, 1),
+		MaxTempC:  roundTo(maxTemp, 1),
+		MinTempC:  roundTo(minTemp, 1),
+		Source:    "NASA POWER Daily",
+		Timestamp: time.Now(),
+	}
+
+	if moisture, days := meanValidValues(param.GWETTOP); days > 0 {
+		observation.SurfaceSoilMoisture = roundTo(moisture, 3)
+		observation.HasSoilMoisture = true
+	}
+	if precip, days := meanValidValues(param.PRECTOT); days > 0 {
+		observation.DailyPrecipitationMM = roundTo(precip, 1)
+		observation.HasPrecipitation = true
+	}
+
+	s.dailyCacheMu.Lock()
+	s.dailyCache[cacheKey] = observation
+	s.dailyCacheAt[cacheKey] = time.Now()
+	s.dailyCacheMu.Unlock()
+
+	return observation, nil
+}
+
+// meanValidValues averages finite daily values, ignoring NASA's -999 fill values.
+func meanValidValues(series map[string]float64) (float64, int) {
+	sum := 0.0
+	days := 0
+	for _, v := range series {
+		if v <= -900 {
+			continue
+		}
+		sum += v
+		days++
+	}
+	if days == 0 {
+		return 0, 0
+	}
+	return sum / float64(days), days
+}
+
+// extremeValidValue returns the highest or lowest finite daily value.
+func extremeValidValue(series map[string]float64, wantMax bool) (float64, int) {
+	value := 0.0
+	days := 0
+	for _, v := range series {
+		if v <= -900 {
+			continue
+		}
+		if days == 0 || (wantMax && v > value) || (!wantMax && v < value) {
+			value = v
+		}
+		days++
+	}
+	return value, days
+}
+
+func roundTo(value float64, places int) float64 {
+	factor := math.Pow(10, float64(places))
+	return math.Round(value*factor) / factor
 }
 
 // generateFallbackPower provides high-resolution climatological norms based on Kenya climate history.

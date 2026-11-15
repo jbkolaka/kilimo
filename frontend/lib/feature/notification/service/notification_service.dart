@@ -35,15 +35,24 @@ class NotificationService {
   Future<List<FarmNotification>> fetchLiveNotifications({
     required double latitude,
     required double longitude,
+    List<String> crops = const [],
+    String farmName = '',
   }) async {
     final lat = double.parse(latitude.toStringAsFixed(4));
     final lon = double.parse(longitude.toStringAsFixed(4));
 
     // Request alerts using only the farm coordinates, not the saved county.
+    // The crop list lets the backend check live NASA temperatures against each
+    // crop's tolerance limits and name the plants at risk.
     try {
       final response = await _dio.post(
         '$backendBaseUrl/nasa/notifications',
-        data: {'latitude': lat, 'longitude': lon},
+        data: {
+          'latitude': lat,
+          'longitude': lon,
+          if (crops.isNotEmpty) 'crops': crops,
+          if (farmName.trim().isNotEmpty) 'farm_name': farmName.trim(),
+        },
       );
       if (response.statusCode == 200 && response.data is Map<String, dynamic>) {
         final data = response.data as Map<String, dynamic>;
