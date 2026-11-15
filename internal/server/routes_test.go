@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"kilimo/internal/models"
 
 	"kilimo/internal/auth"
 	"kilimo/internal/ml"
@@ -330,5 +332,49 @@ func TestSimulateScenariosEndpoint(t *testing.T) {
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d, body: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestNASANotificationsEndpoint(t *testing.T) {
+	s := setupTestServer()
+	handler := s.RegisterRoutes()
+
+	payload := map[string]interface{}{
+		"latitude":  -0.3031,
+		"longitude": 36.0800,
+		"region":    "Nakuru",
+	}
+	body, _ := json.Marshal(payload)
+	req, _ := http.NewRequest("POST", "/api/v1/nasa/notifications", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d, body: %s", rr.Code, rr.Body.String())
+	}
+
+	var resp struct {
+		Count         int                       `json:"count"`
+		CriticalCount int                       `json:"critical_count"`
+		Notifications []models.FarmNotification `json:"notifications"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode notification response: %v", err)
+	}
+
+	if resp.Count == 0 {
+		t.Fatalf("expected notifications to be generated, got 0")
+	}
+
+	hasSatelliteAlert := false
+	for _, n := range resp.Notifications {
+		if strings.Contains(n.Source, "NASA") {
+			hasSatelliteAlert = true
+			break
+		}
+	}
+	if !hasSatelliteAlert {
+		t.Fatalf("expected at least one NASA satellite notification")
 	}
 }

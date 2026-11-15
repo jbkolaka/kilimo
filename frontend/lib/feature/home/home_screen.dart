@@ -1,3 +1,4 @@
+import 'package:mwandu/feature/notification/service/notification_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:mwandu/core/components/bottom_app_bar/index.dart';
@@ -54,32 +55,37 @@ class _HomeScreenState extends State<HomeScreen> {
           return Scaffold(
             backgroundColor: tokens.background,
             body: IndexedStack(index: _selectedTabIndex, children: pages),
-            bottomNavigationBar: CBottomAppBar(
-              currentIndex: _selectedTabIndex,
-              onTap: (index) {
-                setState(() => _selectedTabIndex = index);
+            bottomNavigationBar: ValueListenableBuilder<int>(
+              valueListenable: NotificationService.unreadCountNotifier,
+              builder: (context, unreadCount, _) {
+                return CBottomAppBar(
+                  currentIndex: _selectedTabIndex,
+                  onTap: (index) {
+                    setState(() => _selectedTabIndex = index);
+                  },
+                  items: [
+                    const CBottomAppBarItem(
+                      label: 'Home',
+                      icon: Icon(Icons.home_outlined),
+                      selectedIcon: Icon(Icons.home),
+                      tooltip: 'Kilimo Farm Dashboard',
+                    ),
+                    CBottomAppBarItem(
+                      label: 'Notifications',
+                      icon: const Icon(Icons.notifications_outlined),
+                      selectedIcon: const Icon(Icons.notifications),
+                      badgeCount: unreadCount,
+                      tooltip: 'Live Alerts and Satellite Telemetry',
+                    ),
+                    const CBottomAppBarItem(
+                      label: 'Settings',
+                      icon: Icon(Icons.settings_outlined),
+                      selectedIcon: Icon(Icons.settings),
+                      tooltip: 'Theme and Profile Settings',
+                    ),
+                  ],
+                );
               },
-              items: const [
-                CBottomAppBarItem(
-                  label: 'Home',
-                  icon: Icon(Icons.home_outlined),
-                  selectedIcon: Icon(Icons.home),
-                  tooltip: 'Kilimo Farm Dashboard',
-                ),
-                CBottomAppBarItem(
-                  label: 'Notifications',
-                  icon: Icon(Icons.notifications_outlined),
-                  selectedIcon: Icon(Icons.notifications),
-                  badgeCount: 2,
-                  tooltip: 'Alerts and Satellite Advisories',
-                ),
-                CBottomAppBarItem(
-                  label: 'Settings',
-                  icon: Icon(Icons.settings_outlined),
-                  selectedIcon: Icon(Icons.settings),
-                  tooltip: 'Theme and Profile Settings',
-                ),
-              ],
             ),
           );
         },

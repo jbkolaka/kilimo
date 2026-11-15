@@ -44,6 +44,7 @@ func (s *Server) RegisterRoutes() http.Handler {
 			farmerGroup.PUT("/location", s.UpdateFarmLocationHandler)
 			farmerGroup.GET("/recommendations", s.GetFarmRecommendationsHandler)
 			farmerGroup.GET("/vulnerabilities", s.GetFarmVulnerabilitiesHandler)
+			farmerGroup.GET("/notifications", s.GetFarmNotificationsHandler)
 			farmerGroup.POST("/simulate", s.SimulateFarmScenariosHandler)
 		}
 
@@ -55,6 +56,8 @@ func (s *Server) RegisterRoutes() http.Handler {
 		// NASA Earth Observation Endpoints
 		v1.POST("/nasa/observations", s.FetchNASAObservationsHandler)
 		v1.GET("/nasa/metrics-info", s.GetNASAMetricsInfoHandler)
+		v1.POST("/nasa/notifications", s.FetchNASANotificationsHandler)
+		v1.GET("/nasa/notifications", s.FetchNASANotificationsHandler)
 
 		// Field Vulnerability Diagnosis
 		v1.POST("/analyze/vulnerabilities", s.AnalyzeVulnerabilitiesHandler)
@@ -84,12 +87,14 @@ func (s *Server) RootHandler(c *gin.Context) {
 			"farm_profile":         "GET  /api/v1/farm/profile (Bearer token auth)",
 			"farm_recommendations": "GET  /api/v1/farm/recommendations (Direct tailored strategies)",
 			"farm_vulnerabilities": "GET  /api/v1/farm/vulnerabilities",
+			"farm_notifications":   "GET  /api/v1/farm/notifications (Live NASA satellite alerts)",
 			"farm_simulate":        "POST /api/v1/farm/simulate",
 			"health":               "GET  /health",
 			"regions":              "GET  /api/v1/regions",
 			"crops":                "GET  /api/v1/crops",
 			"nasa_observations":    "POST /api/v1/nasa/observations",
 			"nasa_metrics_info":    "GET  /api/v1/nasa/metrics-info",
+			"nasa_notifications":   "GET/POST /api/v1/nasa/notifications (Live alerts by coordinates)",
 			"rotations_recommend":  "POST /api/v1/rotations/recommend",
 			"rotations_simulate":   "POST /api/v1/rotations/simulate",
 		},
