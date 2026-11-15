@@ -49,7 +49,15 @@ func New() Service {
 	if port == "" {
 		port = "5432"
 	}
-	connStr := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable&search_path=%s", username, password, host, port, database, schema)
+	sslMode := os.Getenv("BLUEPRINT_DB_SSLMODE")
+	if sslMode == "" {
+		if os.Getenv("APP_ENV") == "production" || os.Getenv("RENDER") != "" {
+			sslMode = "require"
+		} else {
+			sslMode = "disable"
+		}
+	}
+	connStr := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=%s&search_path=%s", username, password, host, port, database, sslMode, schema)
 	db, err := sql.Open("pgx", connStr)
 	if err != nil {
 		log.Printf("Warning: failed to open database connection: %v", err)

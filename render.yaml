@@ -13,9 +13,6 @@ services:
         value: 10000
       - key: APP_ENV
         value: production
-      - key: FRONTEND_URL
-        # Set this after deploying the frontend — e.g. https://kilimo-frontend.onrender.com
-        sync: false
       - key: BLUEPRINT_DB_HOST
         fromDatabase:
           name: kilimo-db
@@ -38,6 +35,8 @@ services:
           property: password
       - key: BLUEPRINT_DB_SCHEMA
         value: public
+      - key: BLUEPRINT_DB_SSLMODE
+        value: require
 
   # ── Flutter Web Frontend ────────────────────────────────────────────────────
   - type: web
