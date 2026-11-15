@@ -1,0 +1,64 @@
+services:
+  # ── Go Backend API ──────────────────────────────────────────────────────────
+  - type: web
+    name: kilimo-api
+    runtime: go
+    plan: free
+    rootDir: .
+    buildCommand: go build -o main cmd/api/main.go
+    startCommand: ./main
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: APP_ENV
+        value: production
+      - key: FRONTEND_URL
+        # Set this after deploying the frontend — e.g. https://kilimo-frontend.onrender.com
+        sync: false
+      - key: BLUEPRINT_DB_HOST
+        fromDatabase:
+          name: kilimo-db
+          property: host
+      - key: BLUEPRINT_DB_PORT
+        fromDatabase:
+          name: kilimo-db
+          property: port
+      - key: BLUEPRINT_DB_DATABASE
+        fromDatabase:
+          name: kilimo-db
+          property: database
+      - key: BLUEPRINT_DB_USERNAME
+        fromDatabase:
+          name: kilimo-db
+          property: user
+      - key: BLUEPRINT_DB_PASSWORD
+        fromDatabase:
+          name: kilimo-db
+          property: password
+      - key: BLUEPRINT_DB_SCHEMA
+        value: public
+
+  # ── Flutter Web Frontend ────────────────────────────────────────────────────
+  - type: web
+    name: kilimo-frontend
+    runtime: static
+    plan: free
+    rootDir: frontend
+    buildCommand: flutter build web --release
+    staticPublishPath: build/web
+    headers:
+      - path: /*
+        name: Cache-Control
+        value: no-cache
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+
+# ── Managed PostgreSQL Database ─────────────────────────────────────────────
+databases:
+  - name: kilimo-db
+    plan: free
+    databaseName: kilimo
+    user: kilimo_user
