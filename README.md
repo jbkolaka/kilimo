@@ -1,4 +1,4 @@
-# Kilimo — Climate-Resilient Agroclimatology & Crop Rotation Decision Support
+# Kilimo: Climate-Resilient Agroclimatology & Crop Rotation Decision Support
 
 Kilimo is a full-stack, satellite-informed agricultural decision support platform built for smallholder farmers and agronomists in Kenya. Developed for the **NASA Space Apps Challenge (Resilient Crop Rotations)**, Kilimo pairs NASA Earth Observations (SMAP, GPM, NASA POWER, SRTM) with machine learning, regional soil physics, and an agronomic crop catalog to evaluate climate stress, optimize rotations, and provide actionable farm advisories.
 
