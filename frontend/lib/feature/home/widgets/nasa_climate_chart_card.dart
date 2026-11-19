@@ -104,10 +104,10 @@ class _NasaClimateChartCardState extends State<NasaClimateChartCard> {
 
   String _getXAxisLabel(NasaTimeInterval interval) {
     return switch (interval) {
-      NasaTimeInterval.monthly => '12-Month Observation Timeline',
-      NasaTimeInterval.weekly => '52-Week Agricultural Cycle',
-      NasaTimeInterval.daily => 'Duration: Range 1–7 & 7–14 Days',
-      NasaTimeInterval.yearly => 'Multi-Year Climate Baseline (2021-2024)',
+      NasaTimeInterval.monthly => 'Latest 12-Month Observation Timeline',
+      NasaTimeInterval.weekly => 'Latest 52-Week Agricultural Cycle',
+      NasaTimeInterval.daily => 'Latest 14 Days (Newest at Right)',
+      NasaTimeInterval.yearly => 'Multi-Year Climate Baseline',
     };
   }
 
@@ -221,7 +221,7 @@ class _NasaClimateChartCardState extends State<NasaClimateChartCard> {
                     ),
                     CSelectItem(
                       value: NasaTimeInterval.daily,
-                      label: 'Daily (Last 14 Days: 1-7 & 7-14)',
+                      label: 'Daily (Latest 14 Days)',
                     ),
                     CSelectItem(
                       value: NasaTimeInterval.yearly,
@@ -297,9 +297,7 @@ class _NasaClimateChartCardState extends State<NasaClimateChartCard> {
                 onPointTap: (series, point) {
                   final xIndex = point.x.toInt();
                   final label = (xIndex >= 0 && xIndex < _data.xLabels.length)
-                      ? (_selectedInterval == NasaTimeInterval.daily
-                            ? 'Day ${_data.xLabels[xIndex]}'
-                            : _data.xLabels[xIndex])
+                      ? _data.xLabels[xIndex]
                       : 'Point ${point.x.toInt()}';
                   setState(() {
                     _selectedPointDetails =
@@ -572,9 +570,7 @@ class _NasaClimateChartCardState extends State<NasaClimateChartCard> {
                 ? precip.points[i].y.toStringAsFixed(1)
                 : '-';
 
-            final periodLabel = _selectedInterval == NasaTimeInterval.daily
-                ? 'Day ${_data.xLabels[i]}'
-                : _data.xLabels[i];
+            final periodLabel = _data.xLabels[i];
 
             return DataRow(
               cells: [

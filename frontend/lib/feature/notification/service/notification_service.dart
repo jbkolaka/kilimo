@@ -85,9 +85,10 @@ class NotificationService {
     required String region,
   }) async {
     final now = DateTime.now();
-    // NASA POWER daily products publish with a lag of a few days.
-    final end = now.subtract(const Duration(days: 3));
-    final start = end.subtract(const Duration(days: 6));
+    // Ask for the freshest window ending today. POWER publishes with a short
+    // lag, so only days that actually return values are averaged and shown.
+    final end = now;
+    final start = end.subtract(const Duration(days: 3));
     final startParam = _formatNasaDate(start);
     final endParam = _formatNasaDate(end);
 
@@ -130,7 +131,8 @@ class NotificationService {
     }
 
     final alerts = <FarmNotification>[];
-    final windowLabel = '${_shortDate(start)}–${_shortDate(end)}';
+    final windowLabel =
+        _observedWindow(parameter) ?? '${_shortDate(start)}–${_shortDate(end)}';
 
     if (surfaceWetness != null) {
       final isMoistureDeficit = surfaceWetness < 0.50;
@@ -225,6 +227,30 @@ class NotificationService {
       return null;
     }
     return values.reduce((a, b) => a + b) / values.length;
+  }
+
+  /// Labels the window with the dates POWER actually reported, so the alert
+  /// never claims a day whose values were still -999 fill placeholders.
+  String? _observedWindow(Map<String, dynamic> parameter) {
+    DateTime? earliest;
+    DateTime? latest;
+    for (final series in parameter.values) {
+      if (series is! Map) continue;
+      for (final entry in series.entries) {
+        final value = entry.value;
+        if (value is! num || value <= -900) continue;
+        final key = entry.key.toString();
+        if (key.length != 8) continue;
+        final date = DateTime.tryParse(
+          '${key.substring(0, 4)}-${key.substring(4, 6)}-${key.substring(6, 8)}',
+        );
+        if (date == null) continue;
+        if (earliest == null || date.isBefore(earliest)) earliest = date;
+        if (latest == null || date.isAfter(latest)) latest = date;
+      }
+    }
+    if (earliest == null || latest == null) return null;
+    return '${_shortDate(earliest)}–${_shortDate(latest)}';
   }
 
   String _formatNasaDate(DateTime date) {

@@ -535,8 +535,9 @@ func (s *Service) fetchNASAPower(ctx context.Context, lat, lon float64) (*NASAPo
 
 // FetchRecentDaily returns the most recent real daily NASA POWER observations
 // (air temperature, surface soil wetness and precipitation) for a coordinate.
-// NASA POWER daily products publish with a short lag, so the window ends a few
-// days before today. Results are cached briefly to stay friendly to the API.
+// The request always ends today; NASA POWER daily products publish with a
+// short lag, so the reported window is narrowed to the days that actually
+// carry observations. Results are cached briefly to stay friendly to the API.
 func (s *Service) FetchRecentDaily(ctx context.Context, lat, lon float64) (*DailyObservation, error) {
 	cacheKey := fmt.Sprintf("%.2f,%.2f", lat, lon)
 	s.dailyCacheMu.RLock()
@@ -547,8 +548,8 @@ func (s *Service) FetchRecentDaily(ctx context.Context, lat, lon float64) (*Dail
 		return cached, nil
 	}
 
-	end := time.Now().UTC().AddDate(0, 0, -3)
-	start := end.AddDate(0, 0, -7)
+	end := time.Now().UTC()
+	start := end.AddDate(0, 0, -3)
 	apiURL := fmt.Sprintf(
 		"https://power.larc.nasa.gov/api/temporal/daily/point?parameters=T2M,T2M_MAX,T2M_MIN,GWETTOP,PRECTOTCORR&community=AG&longitude=%.4f&latitude=%.4f&start=%s&end=%s&format=JSON",
 		lon, lat, start.Format("20060102"), end.Format("20060102"),
@@ -597,11 +598,18 @@ func (s *Service) FetchRecentDaily(ctx context.Context, lat, lon float64) (*Dail
 		return nil, fmt.Errorf("nasa power daily api returned no usable temperature values")
 	}
 
+	// Report the span of days that actually returned data rather than the
+	// requested range, so the dashboard never claims a stale window.
+	observedStart, observedEnd := start, end
+	if first, last, ok := observationSpan(param.T2M, param.T2M_MAX, param.T2M_MIN, param.GWETTOP, param.PRECTOT); ok {
+		observedStart, observedEnd = first, last
+	}
+
 	observation := &DailyObservation{
 		Latitude:  lat,
 		Longitude: lon,
-		StartDate: start.Format("02 Jan"),
-		EndDate:   end.Format("02 Jan"),
+		StartDate: observedStart.Format("02 Jan"),
+		EndDate:   observedEnd.Format("02 Jan"),
 		Days:      meanDays,
 		MeanTempC: roundTo(meanTemp, 1),
 		MaxTempC:  roundTo(maxTemp, 1),
@@ -625,6 +633,32 @@ func (s *Service) FetchRecentDaily(ctx context.Context, lat, lon float64) (*Dail
 	s.dailyCacheMu.Unlock()
 
 	return observation, nil
+}
+
+// observationSpan returns the earliest and latest dates that carry usable
+// values across the supplied daily series.
+func observationSpan(series ...map[string]float64) (time.Time, time.Time, bool) {
+	var earliest, latest time.Time
+	found := false
+	for _, values := range series {
+		for key, value := range values {
+			if value <= -900 || len(key) != 8 {
+				continue
+			}
+			date, err := time.Parse("20060102", key)
+			if err != nil {
+				continue
+			}
+			if !found || date.Before(earliest) {
+				earliest = date
+			}
+			if !found || date.After(latest) {
+				latest = date
+			}
+			found = true
+		}
+	}
+	return earliest, latest, found
 }
 
 // meanValidValues averages finite daily values, ignoring NASA's -999 fill values.

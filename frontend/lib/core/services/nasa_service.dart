@@ -160,21 +160,10 @@ class NasaSoilProfile {
       final parameter = properties?['parameter'] as Map<String, dynamic>?;
 
       if (parameter != null) {
-        final gwettop = parameter['GWETTOP'] as Map<String, dynamic>?;
-        if (gwettop != null && gwettop.isNotEmpty) {
-          final firstVal = gwettop.values.first;
-          if (firstVal is num && firstVal > -900) {
-            wetness = firstVal.toDouble();
-          }
-        }
-
-        final t2m = parameter['T2M'] as Map<String, dynamic>?;
-        if (t2m != null && t2m.isNotEmpty) {
-          final firstVal = t2m.values.first;
-          if (firstVal is num && firstVal > -900) {
-            temp = firstVal.toDouble();
-          }
-        }
+        wetness = _latestValidValue(
+          parameter['GWETTOP'] as Map<String, dynamic>?,
+        );
+        temp = _latestValidValue(parameter['T2M'] as Map<String, dynamic>?);
       }
     } catch (_) {}
 
@@ -218,6 +207,19 @@ class NasaSoilProfile {
       avgTemp: temp,
       dataSource: 'NASA POWER Agroclimatology (Live)',
     );
+  }
+
+  /// Returns the most recent observation that POWER actually published,
+  /// skipping the -999 fill values used for days without data.
+  static double? _latestValidValue(Map<String, dynamic>? series) {
+    if (series == null) return null;
+    double? value;
+    for (final raw in series.values) {
+      if (raw is num && raw > -900) {
+        value = raw.toDouble();
+      }
+    }
+    return value;
   }
 
   factory NasaSoilProfile.fallback({required double lat, required double lon}) {
@@ -323,6 +325,26 @@ class FarmWeatherSummary {
   }
 }
 
+/// One real NASA POWER observation keyed by its POWER date string.
+class _NasaObservation {
+  final String key;
+  final double moisture;
+  final double temp;
+  final double rain;
+
+  const _NasaObservation(this.key, this.moisture, this.temp, this.rain);
+}
+
+/// An aggregated chart point (one day, week, month or year).
+class _NasaBucket {
+  final String label;
+  final double moisture;
+  final double temp;
+  final double rain;
+
+  const _NasaBucket(this.label, this.moisture, this.temp, this.rain);
+}
+
 class NasaService {
   final Dio _dio;
   final String backendBaseUrl;
@@ -416,11 +438,14 @@ class NasaService {
       }
     } catch (_) {}
 
-    // 2. Direct NASA POWER API fallback
+    // 2. Direct NASA POWER API fallback, always asking for the latest days.
+    final now = DateTime.now().toUtc();
+    final start = now.subtract(const Duration(days: 3));
     final url =
         'https://power.larc.nasa.gov/api/temporal/daily/point?'
         'parameters=GWETTOP,T2M&community=AG&longitude=$lon&latitude=$lat'
-        '&start=20240101&end=20240102&format=JSON';
+        '&start=${_nasaDateParam(start)}&end=${_nasaDateParam(now)}'
+        '&format=JSON';
 
     try {
       final response = await _dio.get(url);
@@ -524,28 +549,41 @@ class NasaService {
       } catch (_) {}
     }
 
-    // 2. Direct NASA POWER API fallback
+    // 2. Direct NASA POWER API fallback. Every window is derived from today so
+    // the chart always tracks the newest published observations instead of a
+    // fixed year in the past.
     try {
+      final now = DateTime.now().toUtc();
       final String url;
       switch (interval) {
         case NasaTimeInterval.monthly:
           url =
               'https://power.larc.nasa.gov/api/temporal/monthly/point?'
               'parameters=GWETTOP,T2M,PRECTOTCORR&community=AG&longitude=$lon&latitude=$lat'
-              '&start=2023&end=2023&format=JSON';
+              '&start=${now.year - 1}&end=${now.year}&format=JSON';
           break;
         case NasaTimeInterval.daily:
+          final start = now.subtract(const Duration(days: 13));
           url =
               'https://power.larc.nasa.gov/api/temporal/daily/point?'
               'parameters=GWETTOP,T2M,PRECTOTCORR&community=AG&longitude=$lon&latitude=$lat'
-              '&start=20230101&end=20230114&format=JSON';
+              '&start=${_nasaDateParam(start)}&end=${_nasaDateParam(now)}'
+              '&format=JSON';
           break;
         case NasaTimeInterval.weekly:
+          // A weekly view needs daily observations to average into 52 weeks.
+          final start = now.subtract(const Duration(days: 363));
+          url =
+              'https://power.larc.nasa.gov/api/temporal/daily/point?'
+              'parameters=GWETTOP,T2M,PRECTOTCORR&community=AG&longitude=$lon&latitude=$lat'
+              '&start=${_nasaDateParam(start)}&end=${_nasaDateParam(now)}'
+              '&format=JSON';
+          break;
         case NasaTimeInterval.yearly:
           url =
               'https://power.larc.nasa.gov/api/temporal/monthly/point?'
               'parameters=GWETTOP,T2M,PRECTOTCORR&community=AG&longitude=$lon&latitude=$lat'
-              '&start=2021&end=2024&format=JSON';
+              '&start=${now.year - 5}&end=${now.year - 1}&format=JSON';
           break;
       }
 
@@ -567,6 +605,8 @@ class NasaService {
               gwettop: gwettop,
               t2m: t2m,
               rain: rain,
+              lat: lat,
+              lon: lon,
             );
           }
         }
@@ -598,54 +638,61 @@ class NasaService {
     required Map<String, dynamic> gwettop,
     required Map<String, dynamic> t2m,
     required Map<String, dynamic> rain,
+    required double lat,
+    required double lon,
   }) {
-    final rawDates = gwettop.keys.toList()..sort();
-    final dates = interval == NasaTimeInterval.monthly
-        ? rawDates.where((k) => !k.endsWith('13')).toList()
-        : rawDates;
+    final observations = <_NasaObservation>[];
+    for (final key in gwettop.keys) {
+      // POWER monthly responses append a `13` annual roll-up key.
+      if (key.length == 6 && key.endsWith('13')) continue;
+      final moisture = gwettop[key];
+      final temperature = t2m[key];
+      final precipitation = rain[key];
+      if (moisture is! num || temperature is! num || precipitation is! num) {
+        continue;
+      }
+      // -999 marks a day POWER has not published yet; plotting it would
+      // invent a reading that was never measured.
+      if (moisture <= -900 || temperature <= -900 || precipitation <= -900) {
+        continue;
+      }
+      observations.add(
+        _NasaObservation(
+          key,
+          moisture.toDouble(),
+          temperature.toDouble(),
+          precipitation.toDouble(),
+        ),
+      );
+    }
+    observations.sort((a, b) => a.key.compareTo(b.key));
+
+    final buckets = switch (interval) {
+      NasaTimeInterval.daily => _dailyBuckets(observations),
+      NasaTimeInterval.weekly => _weeklyBuckets(observations),
+      NasaTimeInterval.monthly => _monthlyBuckets(observations),
+      NasaTimeInterval.yearly => _yearlyBuckets(observations),
+    };
+    if (buckets.isEmpty) {
+      return _generateCalibratedTimeSeries(
+        interval: interval,
+        lat: lat,
+        lon: lon,
+      );
+    }
 
     final List<String> labels = [];
     final List<CLineChartPoint> moisturePoints = [];
     final List<CLineChartPoint> tempPoints = [];
     final List<CLineChartPoint> rainPoints = [];
 
-    final maxCount = interval == NasaTimeInterval.monthly ? 12 : 14;
-    final count = math.min(maxCount, dates.length);
+    for (int i = 0; i < buckets.length; i++) {
+      final bucket = buckets[i];
+      labels.add(bucket.label);
 
-    for (int i = 0; i < count; i++) {
-      final key = dates[i];
-      final String label;
-
-      switch (interval) {
-        case NasaTimeInterval.daily:
-          label = '${i + 1}';
-          break;
-        case NasaTimeInterval.monthly:
-          if (key.length >= 6) {
-            final monthNum = int.tryParse(key.substring(4, 6)) ?? (i + 1);
-            label = (monthNum >= 1 && monthNum <= 12)
-                ? _monthNames[monthNum - 1]
-                : _monthNames[i % 12];
-          } else {
-            label = _monthNames[i % 12];
-          }
-          break;
-        case NasaTimeInterval.weekly:
-          label = 'W${(i + 1) * 4}';
-          break;
-        case NasaTimeInterval.yearly:
-          label = key.length >= 4 ? key.substring(0, 4) : 'Y${i + 1}';
-          break;
-      }
-      labels.add(label);
-
-      final rawM = (gwettop[key] as num?)?.toDouble() ?? 0.5;
-      final rawT = (t2m[key] as num?)?.toDouble() ?? 20.0;
-      final rawR = (rain[key] as num?)?.toDouble() ?? 2.0;
-
-      final mVal = (rawM * 100).clamp(0.0, 100.0);
-      final tVal = rawT.clamp(-10.0, 50.0);
-      final rVal = rawR.clamp(0.0, 50.0);
+      final mVal = (bucket.moisture * 100).clamp(0.0, 100.0).toDouble();
+      final tVal = bucket.temp.clamp(-10.0, 50.0).toDouble();
+      final rVal = bucket.rain.clamp(0.0, 50.0).toDouble();
 
       moisturePoints.add(
         CLineChartPoint(
@@ -670,12 +717,39 @@ class NasaService {
       );
     }
 
+    final count = buckets.length;
     final List<int>? liveTickIndices = switch (interval) {
       NasaTimeInterval.daily =>
         count >= 14 ? const [0, 6, 13] : [0, count ~/ 2, count - 1],
+      NasaTimeInterval.weekly => count >= 52 ? const [0, 25, 51] : null,
       NasaTimeInterval.monthly => count >= 12 ? const [0, 3, 6, 9, 11] : null,
-      NasaTimeInterval.weekly => count >= 12 ? const [0, 5, 11] : null,
       NasaTimeInterval.yearly => List.generate(count, (idx) => idx),
+    };
+
+    final avgMoisture =
+        buckets.fold<double>(0, (sum, b) => sum + b.moisture) /
+        count *
+        100;
+    final avgTemp =
+        buckets.fold<double>(0, (sum, b) => sum + b.temp) / count;
+    final moistureText = avgMoisture.toStringAsFixed(1);
+    final tempText = avgTemp.toStringAsFixed(1);
+    final summary = switch (interval) {
+      NasaTimeInterval.daily =>
+        'Live NASA POWER observations ${labels.first} – ${labels.last}: '
+            'soil moisture averaged $moistureText%, mean air temperature '
+            '$tempText°C.',
+      NasaTimeInterval.weekly =>
+        'Live NASA POWER weekly averages ${labels.first} – ${labels.last}: '
+            'soil moisture averaged $moistureText%, mean air temperature '
+            '$tempText°C.',
+      NasaTimeInterval.monthly =>
+        'Live NASA POWER observations, latest 12 months: soil moisture '
+            'averaged $moistureText%, mean air temperature $tempText°C.',
+      NasaTimeInterval.yearly =>
+        'Live NASA POWER annual observations ${labels.first} – '
+            '${labels.last}: soil moisture averaged $moistureText%, mean air '
+            'temperature $tempText°C.',
     };
 
     return NasaTimeSeriesData(
@@ -699,8 +773,99 @@ class NasaService {
           color: CColors.blue50,
         ),
       ],
-      summary: 'Live NASA POWER telemetry verified: balanced moisture curve.',
+      summary: summary,
     );
+  }
+
+  /// Most recent 14 published daily observations.
+  List<_NasaBucket> _dailyBuckets(List<_NasaObservation> observations) {
+    final tail = observations.length > 14
+        ? observations.sublist(observations.length - 14)
+        : observations;
+    return tail
+        .map(
+          (o) => _NasaBucket(
+            _shortDateLabel(o.key),
+            o.moisture,
+            o.temp,
+            o.rain,
+          ),
+        )
+        .toList();
+  }
+
+  /// Averages daily observations into the most recent 52 weeks.
+  List<_NasaBucket> _weeklyBuckets(List<_NasaObservation> observations) {
+    final buckets = <_NasaBucket>[];
+    var end = observations.length;
+    while (end > 0 && buckets.length < 52) {
+      final start = math.max(0, end - 7);
+      final chunk = observations.sublist(start, end);
+      final count = chunk.length;
+      buckets.insert(
+        0,
+        _NasaBucket(
+          _shortDateLabel(chunk.first.key),
+          chunk.fold<double>(0, (sum, o) => sum + o.moisture) / count,
+          chunk.fold<double>(0, (sum, o) => sum + o.temp) / count,
+          chunk.fold<double>(0, (sum, o) => sum + o.rain) / count,
+        ),
+      );
+      end = start;
+    }
+    return buckets;
+  }
+
+  /// Most recent 12 published months.
+  List<_NasaBucket> _monthlyBuckets(List<_NasaObservation> observations) {
+    final tail = observations.length > 12
+        ? observations.sublist(observations.length - 12)
+        : observations;
+    return tail.map((o) {
+      final month = o.key.length >= 6
+          ? int.tryParse(o.key.substring(4, 6))
+          : null;
+      final label = (month != null && month >= 1 && month <= 12)
+          ? _monthNames[month - 1]
+          : o.key;
+      return _NasaBucket(label, o.moisture, o.temp, o.rain);
+    }).toList();
+  }
+
+  /// Averages each year of monthly observations into the latest 5 years.
+  List<_NasaBucket> _yearlyBuckets(List<_NasaObservation> observations) {
+    final byYear = <String, List<_NasaObservation>>{};
+    for (final o in observations) {
+      final year = o.key.length >= 4 ? o.key.substring(0, 4) : o.key;
+      byYear.putIfAbsent(year, () => []).add(o);
+    }
+    final years = byYear.keys.toList()..sort();
+    final recent = years.length > 5 ? years.sublist(years.length - 5) : years;
+    return recent.map((year) {
+      final rows = byYear[year]!;
+      final count = rows.length;
+      return _NasaBucket(
+        year,
+        rows.fold<double>(0, (sum, o) => sum + o.moisture) / count,
+        rows.fold<double>(0, (sum, o) => sum + o.temp) / count,
+        rows.fold<double>(0, (sum, o) => sum + o.rain) / count,
+      );
+    }).toList();
+  }
+
+  static String _nasaDateParam(DateTime date) {
+    final y = date.year.toString().padLeft(4, '0');
+    final m = date.month.toString().padLeft(2, '0');
+    final d = date.day.toString().padLeft(2, '0');
+    return '$y$m$d';
+  }
+
+  static String _shortDateLabel(String key) {
+    if (key.length < 8) return key;
+    final month = int.tryParse(key.substring(4, 6));
+    final day = int.tryParse(key.substring(6, 8));
+    if (month == null || day == null || month < 1 || month > 12) return key;
+    return '$day ${_monthNames[month - 1]}';
   }
 
   NasaTimeSeriesData _generateCalibratedTimeSeries({
